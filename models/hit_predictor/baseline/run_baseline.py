@@ -26,8 +26,12 @@ from sklearn.impute import SimpleImputer
 from sklearn.metrics import log_loss, roc_auc_score, ConfusionMatrixDisplay
 from pathlib import Path
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.calibration import calibration_curve
+from sklearn.metrics import brier_score_loss
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+
 
 # ── 1. Config ────────────────────────────────────────────────────────────────
 with open(BASE_DIR / "config.yaml") as f:
@@ -234,7 +238,11 @@ FEATURE_COLS = [c for c in FEATURE_COLS if c in pa.columns]
 na_subset_to_check_later = ['batSide', 'pitcher_hand', 'game_season']
 
 model_df = pa[FEATURE_COLS + [TARGET, DATE_COL]].dropna(subset=na_subset_to_check_later).copy()
+model_df = model_df[~model_df['batting_order'].isnull()] # remove substitute batters
 model_df["game_season"] = model_df["game_season"].astype(int)
+
+
+
 
 
 train_df = model_df[model_df["game_season"].isin(FIT_SEASONS)].copy()
@@ -385,9 +393,9 @@ for i, v in enumerate(counts.values):
 ax.set_title(f"Target distribution — train ({FIT_SEASONS[0]}–{FIT_SEASONS[-1]})")
 ax.set_ylabel("Plate appearances")
 plt.tight_layout()
-plt.savefig(BASE_DIR / "plots/baseline/target_distribution.png", dpi=120)
+plt.savefig(BASE_DIR / "plots/baseline-model/target_distribution.png", dpi=120)
 plt.close()
-print("\nSaved plots/baseline/target_distribution.png")
+print("\nSaved plots/baseline-model/target_distribution.png")
 
 # Target distribution (train set)
 fig, ax = plt.subplots(figsize=(6, 4))
@@ -398,18 +406,16 @@ for i, v in enumerate(counts.values):
 ax.set_title(f"Target distribution — train ({FIT_SEASONS[0]}–{FIT_SEASONS[-1]})")
 ax.set_ylabel("Plate appearances")
 plt.tight_layout()
-plt.savefig(BASE_DIR / "plots/baseline/target_distribution.png", dpi=120)
+plt.savefig(BASE_DIR / "plots/baseline-model/target_distribution.png", dpi=120)
 plt.close()
-print("\nSaved plots/baseline/target_distribution.png")
+print("\nSaved plots/baseline-model/target_distribution.png")
 
 # Calibration curves — how honest are the probability estimates?
 # For each model, bucket predicted probabilities and compare to actual hit rates.
 # A perfectly calibrated model follows the diagonal: if it says 30%, hits happen 30% of the time.
 # This is the key diagnostic before comparing against book implied probabilities.
-from sklearn.calibration import calibration_curve
-from sklearn.metrics import brier_score_loss
 
-PLOT_DIR = BASE_DIR / "plots" / "baseline"
+PLOT_DIR = BASE_DIR / "plots" / "baseline-model"
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 fig, ax = plt.subplots(figsize=(7, 6))

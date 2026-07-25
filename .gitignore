@@ -8,10 +8,6 @@ build/
 dist/
 *.egg-info/
 
-# Virtual environments (if you have one)
-.venv/
-venv/
-env/
 
 # Data (usually too large / sensitive for git)
 data/
@@ -20,3 +16,44 @@ data/
 terraform/.terraform/
 terraform/*.tfstate
 terraform/*.tfstate.backup
+
+# Data files
+*.csv
+*.parquet
+*.json
+*.feather
+*.pkl
+*.pickle
+
+# Plots & figures
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+/plots/
+/figures/
+/outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# macOS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
