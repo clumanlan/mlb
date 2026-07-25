@@ -1,0 +1,343 @@
+/* ============================================================
+   CSS CUSTOM PROPERTIES (variables)
+   Why use variables? Change --color-ok once and every badge,
+   border, and background that uses it updates automatically.
+   Open the browser DevTools > Elements > :root to see them all.
+   ============================================================ */
+:root {
+  /* Backgrounds */
+  --color-bg: #f5f3ef;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #faf9f7;
+
+  /* Borders */
+  --color-border: #e2ddd5;
+  --color-border-subtle: #edeae4;
+
+  /* Text */
+  --color-text-primary: #1a1a18;
+  --color-text-muted: #8a8680;
+  --color-text-label: #6b6762;
+
+  /* Status — ok (green) */
+  --color-ok: #3d6b4a;
+  --color-ok-bg: #edf4f0;
+  --color-ok-border: #c4dccb;
+
+  /* Status — stale (amber) */
+  --color-stale: #8a5a1a;
+  --color-stale-bg: #fdf3e3;
+  --color-stale-border: #e8cc99;
+
+  /* Lineup badge colors */
+  --color-confirmed: #3d6b4a;
+  --color-confirmed-bg: #edf4f0;
+  --color-pending: #6b6762;
+  --color-pending-bg: #f0efed;
+  --color-skipped: #a0998f;
+  --color-skipped-bg: #f5f4f2;
+
+  /* Fonts */
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* Spacing rhythm */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+}
+
+/* ============================================================
+   GLOBAL RESET + BASE
+   ============================================================ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
+   LAYOUT
+   ============================================================ */
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-6);
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  margin-bottom: var(--space-8);
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-5);
+}
+
+.app-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.app-date {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.app-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+
+/* ============================================================
+   SECTION WRAPPER
+   ============================================================ */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Pill badge on section header (e.g. "stage 1") */
+.stage-pill {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  background: var(--color-border-subtle);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
+/* ============================================================
+   LOADING + ERROR STATES
+   ============================================================ */
+.section-loading,
+.section-error {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  padding: var(--space-4) 0;
+}
+
+.section-error {
+  color: #8a3a1a;
+}
+
+/* ============================================================
+   PIPELINE STATUS CARDS
+   ============================================================ */
+.pipeline-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-4);
+}
+
+.pipeline-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.pipeline-card.card-stale {
+  border-color: var(--color-stale-border);
+  background: var(--color-stale-bg);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.card-meta {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.card-error {
+  font-size: 12px;
+  color: #8a3a1a;
+  background: #fdf3f0;
+  border: 1px solid #e8c4b8;
+  border-radius: 4px;
+  padding: var(--space-2) var(--space-3);
+}
+
+.games-processed {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.games-processed li {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  display: flex;
+  justify-content: space-between;
+}
+
+.games-processed .gp-key {
+  color: var(--color-text-label);
+}
+
+.pipeline-summary {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  padding: var(--space-2) 0;
+}
+
+.summary-stale {
+  color: var(--color-stale);
+}
+
+/* ============================================================
+   STATUS BADGES
+   ============================================================ */
+.badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px var(--space-2);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.badge-ok {
+  color: var(--color-ok);
+  background: var(--color-ok-bg);
+  border: 1px solid var(--color-ok-border);
+}
+
+.badge-stale {
+  color: var(--color-stale);
+  background: var(--color-stale-bg);
+  border: 1px solid var(--color-stale-border);
+}
+
+.badge-confirmed {
+  color: var(--color-confirmed);
+  background: var(--color-confirmed-bg);
+  border: 1px solid var(--color-ok-border);
+}
+
+.badge-pending {
+  color: var(--color-pending);
+  background: var(--color-pending-bg);
+  border: 1px solid var(--color-border);
+}
+
+.badge-skipped {
+  color: var(--color-skipped);
+  background: var(--color-skipped-bg);
+  border: 1px solid var(--color-border-subtle);
+}
+
+/* ============================================================
+   SLATE TABLE
+   ============================================================ */
+.slate-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.slate-table th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.slate-table td {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  vertical-align: middle;
+}
+
+.slate-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.slate-table tbody tr:hover td {
+  background: var(--color-surface-subtle);
+}
+
+.slate-table .col-time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  width: 80px;
+}
+
+.slate-table .col-matchup {
+  font-weight: 500;
+}
+
+.slate-table .col-odds,
+.slate-table .col-prediction {
+  text-align: center;
+  width: 60px;
+  color: var(--color-text-muted);
+}
+
+.slate-table .col-lineup {
+  width: 110px;
+}
+
+/* ============================================================
+   UTILITY
+   ============================================================ */
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.muted {
+  color: var(--color-text-muted);
+}

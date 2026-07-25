@@ -1,0 +1,9 @@
+project: mlb_predictions
+registry: s3://mlbdk/feast/registry.pb
+provider: aws
+offline_store:
+  type: file
+online_store:
+  type: dynamodb
+  region: us-east-2
+entity_key_serialization_version: 3

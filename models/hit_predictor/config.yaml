@@ -1,0 +1,45 @@
+# Baseline config — hit_predictor
+# Run: python run_baseline.py (from this directory)
+bucket: mlbdk
+region: us-east-2
+target_column: is_hit
+task_type: classification
+date_column: game_date
+time_based_split: true
+test_season: 2025   # held-out — never evaluated during development; final eval only in train.py
+val_season: 2024    # iterate against this during development
+# train = all train_seasons except val_season and test_season
+metric: log_loss
+secondary_metric: brier_score
+model_name: batter_hit_predictor
+
+# Seasons used to build the PA-level training dataset (excludes 2020/2021 covid)
+train_seasons:
+  - 2017
+  - 2018
+  - 2019
+  - 2022
+  - 2023
+  - 2024
+  - 2025
+
+# Seasons used to compute last_season_ba (one season behind each train season)
+# 2016 → feeds 2017; 2019 → feeds 2022 (covid gap bridge)
+feature_seasons:
+  - 2016
+  - 2017
+  - 2018
+  - 2019
+  - 2022
+  - 2023
+  - 2024
+
+drop_columns:
+  - inning
+  - half_inning
+  - pitch_number
+  - play_result
+  - gamepk
+  - play_id
+  - batter_id
+  - pitcher_id

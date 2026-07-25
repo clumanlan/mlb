@@ -1,0 +1,22 @@
+# Python cache & compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Build & distribution artifacts
+build/
+dist/
+*.egg-info/
+
+# Virtual environments (if you have one)
+.venv/
+venv/
+env/
+
+# Data (usually too large / sensitive for git)
+data/
+
+# Terraform state (can contain secrets)
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup

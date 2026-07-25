@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+boto3
+pandas
+pyarrow
+python-dotenv
+httpx
+pytest
+pytest-asyncio

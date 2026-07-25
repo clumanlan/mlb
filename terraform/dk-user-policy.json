@@ -1,0 +1,274 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3MainBucketLevel",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": "arn:aws:s3:::mlbdk"
+    },
+    {
+      "Sid": "S3MainBucketObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:HeadObject"],
+      "Resource": "arn:aws:s3:::mlbdk/*"
+    },
+    {
+      "Sid": "S3ModelBucket",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Resource": "arn:aws:s3:::mlbdk-model"
+    },
+    {
+      "Sid": "S3ModelBucketObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:ReplicateObject"],
+      "Resource": "arn:aws:s3:::mlbdk-model/*"
+    },
+    {
+      "Sid": "SSMOddsApi",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
+      "Resource": "arn:aws:ssm:us-east-2:685464669237:parameter/mlb/odds-api/*"
+    },
+    {
+      "Sid": "SecretsManager",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:us-east-1:685464669237:secret:dkuser_aws_keys-tCBiEx"
+    },
+    {
+      "Sid": "CloudWatchMetrics",
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchAlarms",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:TagResource"
+      ],
+      "Resource": "arn:aws:cloudwatch:us-east-2:685464669237:alarm:mlbdk-*"
+    },
+    {
+      "Sid": "CloudWatchLogsRead",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams",
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents",
+        "logs:StartLiveTail"
+      ],
+      "Resource": [
+        "arn:aws:logs:us-east-2:685464669237:log-group:/aws/lambda/daily_*",
+        "arn:aws:logs:us-east-2:685464669237:log-group:/aws/lambda/daily_*:*"
+      ]
+    },
+    {
+      "Sid": "LambdaFunctions",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:InvokeFunction",
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:GetPolicy",
+        "lambda:ListTags",
+        "lambda:ListVersionsByFunction",
+        "lambda:TagResource",
+        "lambda:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:lambda:us-east-2:685464669237:function:daily_mlb_fetch",
+        "arn:aws:lambda:us-east-2:685464669237:function:daily_process_data",
+        "arn:aws:lambda:us-east-2:685464669237:function:daily_odds_fetch",
+        "arn:aws:lambda:us-east-2:685464669237:function:daily_dkslate_fetch",
+        "arn:aws:lambda:us-east-2:685464669237:function:daily_feature_create"
+      ]
+    },
+    {
+      "Sid": "LambdaOwnLayers",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:PublishLayerVersion",
+        "lambda:GetLayerVersion",
+        "lambda:DeleteLayerVersion",
+        "lambda:ListLayerVersions"
+      ],
+      "Resource": "arn:aws:lambda:us-east-2:685464669237:layer:mlb-custom*"
+    },
+    {
+      "Sid": "LambdaPublicLayers",
+      "Effect": "Allow",
+      "Action": "lambda:GetLayerVersion",
+      "Resource": "arn:aws:lambda:us-east-2:336392948345:layer:AWSSDKPandas-Python311:*"
+    },
+    {
+      "Sid": "ECR",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchGetImage",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:CompleteLayerUpload",
+        "ecr:CreateRepository",
+        "ecr:DescribeImages",
+        "ecr:DescribeRepositories",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:InitiateLayerUpload",
+        "ecr:ListImages",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart"
+      ],
+      "Resource": "arn:aws:ecr:*:685464669237:repository/*"
+    },
+    {
+      "Sid": "ECRAuth",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "IAMRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:UpdateRole",
+        "iam:PassRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:ListRoleTags",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:ListAttachedRolePolicies"
+      ],
+      "Resource": "arn:aws:iam::685464669237:role/mlbdk-*"
+    },
+    {
+      "Sid": "IAMSelfServicePolicy",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion"
+      ],
+      "Resource": "arn:aws:iam::685464669237:policy/mlbdk-dk-user-policy"
+    },
+    {
+      "Sid": "StepFunctionsScoped",
+      "Effect": "Allow",
+      "Action": [
+        "states:CreateStateMachine",
+        "states:UpdateStateMachine",
+        "states:DeleteStateMachine",
+        "states:DescribeStateMachine",
+        "states:StartExecution",
+        "states:StopExecution",
+        "states:ListExecutions",
+        "states:DescribeExecution",
+        "states:GetExecutionHistory",
+        "states:ListStateMachineVersions",
+        "states:ListTagsForResource",
+        "states:TagResource",
+        "states:UntagResource"
+      ],
+      "Resource": "arn:aws:states:us-east-2:685464669237:*:mlbdk-*"
+    },
+    {
+      "Sid": "StepFunctionsGlobal",
+      "Effect": "Allow",
+      "Action": "states:ValidateStateMachineDefinition",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EventBridge",
+      "Effect": "Allow",
+      "Action": [
+        "events:PutRule",
+        "events:DeleteRule",
+        "events:DescribeRule",
+        "events:EnableRule",
+        "events:DisableRule",
+        "events:ListRules",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:ListTargetsByRule",
+        "events:ListTagsForResource",
+        "events:TagResource",
+        "events:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:events:us-east-2:685464669237:rule/mlbdk-*",
+        "arn:aws:events:us-east-2:685464669237:event-bus/default"
+      ]
+    },
+    {
+      "Sid": "SNS",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:ListTagsForResource",
+        "sns:TagResource",
+        "sns:Subscribe",
+        "sns:Unsubscribe",
+        "sns:GetSubscriptionAttributes",
+        "sns:ListSubscriptionsByTopic"
+      ],
+      "Resource": "arn:aws:sns:us-east-2:685464669237:mlbdk-*"
+    },
+    {
+      "Sid": "SQS",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:CreateQueue",
+        "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:SetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:ListQueueTags",
+        "sqs:TagQueue",
+        "sqs:UntagQueue"
+      ],
+      "Resource": "arn:aws:sqs:us-east-2:685464669237:mlbdk-*"
+    },
+    {
+      "Sid": "DynamoDB",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeTable",
+        "dynamodb:DeleteTable",
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:BatchGetItem",
+        "dynamodb:Scan",
+        "dynamodb:Query"
+      ],
+      "Resource": "arn:aws:dynamodb:us-east-2:685464669237:table/mlb_predictions.*"
+    }
+  ]
+}
