@@ -364,12 +364,7 @@ result
 # - one summary performance state 
 # - calibration in different bins: ideally we would like the tails optimized for,
 # - so we're worreried more about precision on both ends
-
-
-
-
-
-
+# - let's vverify with claude that this is the case
 
 
 
