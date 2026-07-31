@@ -356,8 +356,6 @@ def build_rules_baseline(
 
 
 
-result = build_rules_baseline(pa, k=100, w_prev=0.4, w_roll=0.4, w_order=0.2)
-result
 # CREATE SOME BASELINE FUNCTION HERE 
 
 # we're going to build a utility function taht runs the same metrics on each output:
@@ -369,30 +367,14 @@ result
 
 
 # ── 4. Season-based train / val / test split ─────────────────────────────────
-FEATURE_COLS = [
-    "batting_order",     # lineup slot (1-9), known pre-game
-    "batSide",           # batter handedness (L/R/S)
-    "pitcher_hand",      # pitcher handedness (L/R) — key platoon split driver
-    "game_season",       # year
-    "weather_condition", # Sunny/Cloudy/etc.
-    "weather_temp",      # temperature (°F)
-    "weight",            # batter weight
-    "height_in_inches",  # batter height
-    "strikeZoneTop",     # batter-specific strike zone boundaries
-    "strikeZoneBottom",
-    "last_season_ba",    # prior-season batting average (main signal)
-]
-FEATURE_COLS = [c for c in FEATURE_COLS if c in pa.columns]
 
 na_subset_to_check_later = ['batSide', 'pitcher_hand', 'game_season']
 
-model_df = pa[FEATURE_COLS + [TARGET, DATE_COL]].dropna(subset=na_subset_to_check_later).copy()
-model_df = model_df[~model_df['batting_order'].isnull()] # remove substitute batters
-model_df["game_season"] = model_df["game_season"].astype(int)
+pa = build_rules_baseline(pa, k=100, w_prev=0.4, w_roll=0.4, w_order=0.2)
+model_df = pa.dropna(subset=na_subset_to_check_later).copy()
+model_df = model_df[~model_df['batting_order'].isnull()]  # remove substitute batters
 
-
-
-
+model_df = model_df[['game_season','comp_rolling_shrunk', 'comp_order_slot', 'xba_pred'] + [TARGET, DATE_COL]]
 
 train_df = model_df[model_df["game_season"].isin(FIT_SEASONS)].copy()
 val_df   = model_df[model_df["game_season"] == VAL_SEASON].copy()
@@ -403,200 +385,99 @@ print(f"Val season:   {VAL_SEASON}  ← iterate against this")
 print(f"Test season:  {TEST_SEASON} ← locked away, not evaluated here")
 print(f"Hit rate — train: {train_df[TARGET].mean():.3f}  val: {val_df[TARGET].mean():.3f}")
 
-X_train = train_df[FEATURE_COLS]
 y_train = train_df[TARGET]
-X_val   = val_df[FEATURE_COLS]
 y_val   = val_df[TARGET]
 
-num_cols = [c for c in FEATURE_COLS if pd.api.types.is_numeric_dtype(X_train[c])]
-cat_cols = [c for c in FEATURE_COLS if c not in num_cols]
+eps = 1e-6  # log_loss is undefined at exact 0/1
 
-def encode(X_tr, X_ev, cat_cols, num_cols):
-    """Impute + encode; fit on train only, transform both."""
-    X_tr = X_tr.copy()
-    X_ev = X_ev.copy()
+# ── 5. Naive floor — predict the train hit rate for every PA ─────────────────
 
-    # Coerce to numpy-compatible types
-    if num_cols:
-        X_tr[num_cols] = X_tr[num_cols].apply(pd.to_numeric, errors="coerce")
-        X_ev[num_cols] = X_ev[num_cols].apply(pd.to_numeric, errors="coerce")
+naive_prob = np.full(len(y_val), y_train.mean())
+naive_prob = np.clip(naive_prob, eps, 1 - eps)
+naive_brier = brier_score_loss(y_val, naive_prob)
+naive_ll = log_loss(y_val, naive_prob, labels=[0, 1])
 
-    if cat_cols:
-        X_tr[cat_cols] = X_tr[cat_cols].astype(object)
-        X_ev[cat_cols] = X_ev[cat_cols].astype(object)
+results = {"Naive baseline": {"log_loss": naive_ll, "brier": naive_brier}}
 
-    num_imp = SimpleImputer(strategy="median")
-    Xtr_num = num_imp.fit_transform(X_tr[num_cols]) if num_cols else np.empty((len(X_tr), 0))
-    Xev_num = num_imp.transform(X_ev[num_cols])     if num_cols else np.empty((len(X_ev), 0))
+# ── 6. Rules-based baseline ───────────────────────────────────────────────────
+# Runs on the FULL `pa` frame (not model_df/val_df) because the rolling/
+# shrinkage component needs the complete within-season play sequence to
+# stay leakage-safe. We slice down to val_df's exact rows afterward.
 
-    if cat_cols:
-        cat_imp = SimpleImputer(strategy="most_frequent")
-        Xtr_cat_imp = cat_imp.fit_transform(X_tr[cat_cols])
-        Xev_cat_imp = cat_imp.transform(X_ev[cat_cols])
-        enc = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
-        Xtr_cat = enc.fit_transform(Xtr_cat_imp)
-        Xev_cat = enc.transform(Xev_cat_imp)
-    else:
-        Xtr_cat = np.empty((len(X_tr), 0))
-        Xev_cat = np.empty((len(X_ev), 0))
+rules_df = build_rules_baseline(pa, k=100, w_prev=0.4, w_roll=0.4, w_order=0.2)
 
-    return np.hstack([Xtr_num, Xtr_cat]), np.hstack([Xev_num, Xev_cat])
+rules_prob = rules_df.loc[val_df.index, 'xba_pred'].to_numpy()
+n_missing = np.isnan(rules_prob).sum()
+if n_missing:
+    print(f"Warning: {n_missing} rules_prob NaNs, filling with train hit rate")
+    rules_prob = np.nan_to_num(rules_prob, nan=y_train.mean())
+rules_prob = np.clip(rules_prob, eps, 1 - eps)
 
-Xtr, Xval = encode(X_train, X_val, cat_cols, num_cols)
+rules_brier = brier_score_loss(y_val, rules_prob)
+rules_ll = log_loss(y_val, rules_prob, labels=[0, 1])
 
+print(f"\nRules-based baseline — LogLoss: {rules_ll:.4f}  Brier: {rules_brier:.4f}")
+print(f"  Δ LogLoss vs naive: {rules_ll - naive_ll:+.4f}")
+print(f"  Δ Brier   vs naive: {rules_brier - naive_brier:+.4f}")
 
+results["Rules-based baseline"] = {"log_loss": rules_ll, "brier": rules_brier}
 
-
-# ── 6. Train three models, evaluate on val ───────────────────────────────────
-results = {}
-
-print("\nTraining naive baseline...")
-naive = DummyClassifier(strategy="prior")
-naive.fit(Xtr, y_train)
-naive_prob = naive.predict_proba(Xval)[:, 1]
-results["Naive baseline"] = {
-    "log_loss": log_loss(y_val, naive_prob),
-    "brier":  brier_score_loss(y_val, naive_prob),
-    "proba":    naive_prob,
+# per-component breakdown — which single rule is doing the most work?
+print("\nRules-based components, evaluated individually (val):")
+print(f"{'Component':<28} {'LogLoss':>9} {'Brier':>9}")
+print("-" * 48)
+component_cols = {
+    'comp_prev_season': 'Rules: prev season only',
+    'comp_rolling_shrunk': 'Rules: rolling shrunk only',
+    'comp_order_slot': 'Rules: order slot only',
 }
+for col, label in component_cols.items():
+    p = rules_df.loc[val_df.index, col].to_numpy()
+    p = np.nan_to_num(p, nan=y_train.mean())
+    p = np.clip(p, eps, 1 - eps)
+    ll = log_loss(y_val, p, labels=[0, 1])
+    br = brier_score_loss(y_val, p)
+    print(f"{label:<28} {ll:>9.4f} {br:>9.4f}")
 
-print("Training logistic regression...")
-scaler   = StandardScaler()
-Xtr_sc   = scaler.fit_transform(Xtr)
-Xval_sc  = scaler.transform(Xval)
-lr = LogisticRegression(max_iter=1000, random_state=42)
-lr.fit(Xtr_sc, y_train)
-lr_prob = lr.predict_proba(Xval_sc)[:, 1]
-results["Logistic regression"] = {
-    "log_loss": log_loss(y_val, lr_prob),
-    "brier":  brier_score_loss(y_val, lr_prob),
-    "proba":    lr_prob,
+calibration_models = {
+    "Naive baseline": naive_prob,
+    "Rules-based baseline": rules_prob,
 }
+colors = ["gray", "seagreen"]
 
-print("Training XGBoost...")
-import xgboost as xgb
-xgb_model = xgb.XGBClassifier(
-    n_estimators=100, random_state=42, verbosity=0,
-    eval_metric="logloss", use_label_encoder=False,
-)
-xgb_model.fit(Xtr, y_train)
-xgb_prob = xgb_model.predict_proba(Xval)[:, 1]
-results["XGBoost"] = {
-    "log_loss": log_loss(y_val, xgb_prob),
-    "brier":    brier_score_loss(y_val, xgb_prob),
-    "proba":    xgb_prob,
-}
-
-
-# ── 7. Print results ─────────────────────────────────────────────────────────
-naive_ll    = results["Naive baseline"]["log_loss"]
-naive_brier = results["Naive baseline"]["brier"]
-
-print(f"\n{'='*64}")
-print(f"BASELINE RESULTS — {MODEL_NAME}")
-print(f"Evaluated on val season {VAL_SEASON} ({len(val_df):,} PAs)  |  Test season {TEST_SEASON} locked")
-print(f"Primary: log_loss (lower=better)  |  Secondary: brier (lower=better)")
-print("="*64)
-print(f"{'Model':<22} {'LogLoss':>9} {'vs Naive':>10}  {'Brier':>9} {'vs Naive':>10}")
-print("-"*64)
-for name, res in results.items():
-    print(name)
-    ll_delta    = res["log_loss"] - naive_ll
-    brier_delta = res["brier"]    - naive_brier
-    ll_str      = f"{ll_delta:+.4f}"    if name != "Naive baseline" else "—"
-    brier_str   = f"{brier_delta:+.4f}" if name != "Naive baseline" else "—"
-    print(f"{name:<22} {res['log_loss']:>9.4f} {ll_str:>10}  {res['brier']:>9.4f} {brier_str:>10}")
-
-
-print("="*64)
-
-xgb_ll = results["XGBoost"]["log_loss"]
-lr_ll  = results["Logistic regression"]["log_loss"]
-ll_nonlinear = (lr_ll - xgb_ll) / lr_ll * 100
-
-print("\nInterpretation:")
-if xgb_ll >= naive_ll and lr_ll >= naive_ll:
-    print("  No model beats naive. Check target distribution, leakage, or data quality.")
-elif ll_nonlinear > 3:
-    print(f"  XGBoost meaningfully better than linear ({ll_nonlinear:.1f}% log_loss reduction).")
-    print("  Nonlinear structure present — tree models warranted in train.py.")
-elif ll_nonlinear < -1:
-    print("  Linear model matches or beats XGBoost. Relationship appears largely linear.")
-    print("  Consider calibrated logistic regression as the production baseline.")
-else:
-    print("  XGBoost ≈ linear model (within noise). Linear is a reasonable starting point.")
-
-if (naive_ll - xgb_ll) / naive_ll * 100 < 1:
-    print("  Both models show weak improvement over naive — features may need enrichment.")
-print("="*64)
-
-
-# ── 8. Plots ─────────────────────────────────────────────────────────────────
-
-# Target distribution (train set)
-fig, ax = plt.subplots(figsize=(6, 4))
-counts = y_train.value_counts().sort_index()
-ax.bar(["No hit (0)", "Hit (1)"], counts.values, color=["steelblue", "tomato"])
-for i, v in enumerate(counts.values):
-    ax.text(i, v + counts.max() * 0.01, f"{v:,}\n({v/len(y_train)*100:.1f}%)", ha="center", fontsize=9)
-ax.set_title(f"Target distribution — train ({FIT_SEASONS[0]}–{FIT_SEASONS[-1]})")
-ax.set_ylabel("Plate appearances")
-plt.tight_layout()
-plt.savefig(BASE_DIR / "plots/baseline-model/target_distribution.png", dpi=120)
-plt.close()
-print("\nSaved plots/baseline-model/target_distribution.png")
-
-# Target distribution (train set)
-fig, ax = plt.subplots(figsize=(6, 4))
-counts = y_train.value_counts().sort_index()
-ax.bar(["No hit (0)", "Hit (1)"], counts.values, color=["steelblue", "tomato"])
-for i, v in enumerate(counts.values):
-    ax.text(i, v + counts.max() * 0.01, f"{v:,}\n({v/len(y_train)*100:.1f}%)", ha="center", fontsize=9)
-ax.set_title(f"Target distribution — train ({FIT_SEASONS[0]}–{FIT_SEASONS[-1]})")
-ax.set_ylabel("Plate appearances")
-plt.tight_layout()
-plt.savefig(BASE_DIR / "plots/baseline-model/target_distribution.png", dpi=120)
-plt.close()
-print("\nSaved plots/baseline-model/target_distribution.png")
-
-# Calibration curves — how honest are the probability estimates?
-# For each model, bucket predicted probabilities and compare to actual hit rates.
-# A perfectly calibrated model follows the diagonal: if it says 30%, hits happen 30% of the time.
-# This is the key diagnostic before comparing against book implied probabilities.
+# ── 7. Plots ─────────────────────────────────────────────────────────────────
 
 PLOT_DIR = BASE_DIR / "plots" / "baseline-model"
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Target distribution (train set)
+fig, ax = plt.subplots(figsize=(6, 4))
+counts = y_train.value_counts().sort_index()
+ax.bar(["No hit (0)", "Hit (1)"], counts.values, color=["steelblue", "tomato"])
+for i, v in enumerate(counts.values):
+    ax.text(i, v + counts.max() * 0.01, f"{v:,}\n({v/len(y_train)*100:.1f}%)", ha="center", fontsize=9)
+ax.set_title(f"Target distribution — train ({FIT_SEASONS[0]}–{FIT_SEASONS[-1]})")
+ax.set_ylabel("Plate appearances")
+plt.tight_layout()
+plt.savefig(PLOT_DIR / "target_distribution.png", dpi=120)
+plt.close()
+print("\nSaved plots/baseline-model/target_distribution.png")
+
+# Calibration curves — how honest are the probability estimates?
 fig, ax = plt.subplots(figsize=(7, 6))
 ax.plot([0, 1], [0, 1], "k--", linewidth=1, label="Perfect calibration")
-
-calibration_models = {
-    "Naive baseline": naive_prob,
-    "Logistic regression": lr_prob,
-    "XGBoost": xgb_prob,
-}
-colors = ["gray", "steelblue", "tomato"]
 
 print("\nBrier scores (lower = better, naive sets the floor):")
 print(f"{'Model':<22} {'Brier':>8} {'vs Naive':>10}")
 print("-" * 42)
 
-naive_brier = brier_score_loss(y_val, naive_prob)
-
 for (name, probs), color in zip(calibration_models.items(), colors):
-    # Calibration curve — strategy="quantile" gives equal-count bins, which is
-    # critical at the PA level: per-PA hit rate is ~0.22, so uniform bins above
-    # 0.5 would be nearly empty. Quantile bins give reliable estimates across
-    # the full predicted range, including your BTS decision range.
     fraction_of_positives, mean_predicted = calibration_curve(
         y_val, probs, n_bins=10, strategy="quantile"
     )
     ax.plot(mean_predicted, fraction_of_positives, marker="o", linewidth=2,
             color=color, label=name)
 
-    # Brier score — mean squared error of probability predictions.
-    # Companion to log loss: less sensitive to extreme confident errors,
-    # more interpretable as "average squared distance from the truth".
     brier = brier_score_loss(y_val, probs)
     delta = f"{brier - naive_brier:+.4f}" if name != "Naive baseline" else "—"
     print(f"{name:<22} {brier:>8.4f} {delta:>10}")
@@ -613,68 +494,37 @@ plt.savefig(PLOT_DIR / "calibration_curve.png", dpi=120)
 plt.close()
 print(f"\nSaved {PLOT_DIR / 'calibration_curve.png'}")
 
-# Log loss broken down by predicted-probability bucket — aggregate log loss
-# can hide problems in your decision-relevant range. For BTS specifically,
-# you care about calibration at the top end (predicted hit prob ≥ 0.30 at the
-# PA level, which rolls up to the high-confidence game-level picks).
-print("\nXGBoost log loss by predicted probability bucket (val):")
+# Log loss by predicted-probability bucket — tails matter most to you.
+bucket_edges = [0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 1.01]
+
+print("\nRules-based baseline log loss by predicted probability bucket (val):")
 print(f"{'Bucket':<14} {'N':>8} {'Mean pred':>11} {'Hit rate':>10} {'LogLoss':>9}")
 print("-" * 54)
-bucket_edges = [0.0, 0.10, 0.20, 0.30, 0.40, 0.50, 1.01]
 for lo, hi in zip(bucket_edges[:-1], bucket_edges[1:]):
-    mask = (xgb_prob >= lo) & (xgb_prob < hi)
+    mask = (rules_prob >= lo) & (rules_prob < hi)
     n = int(mask.sum())
     if n == 0:
         continue
-    bucket_ll = log_loss(y_val[mask], xgb_prob[mask], labels=[0, 1])
-    print(f"[{lo:.2f}, {hi:.2f})   {n:>8,} {xgb_prob[mask].mean():>11.3f} "
+    bucket_ll = log_loss(y_val[mask], rules_prob[mask], labels=[0, 1])
+    print(f"[{lo:.2f}, {hi:.2f})   {n:>8,} {rules_prob[mask].mean():>11.3f} "
           f"{y_val[mask].mean():>10.3f} {bucket_ll:>9.4f}")
 
-# Confusion matrix (XGBoost on val, threshold=0.5)
-# Note: threshold=0.5 is mostly informational at PA level since hit rate ~0.22;
-# the model will predict "no hit" for almost everything. Look at the
-# probability distribution and calibration curve for the real story.
-xgb_pred = (xgb_prob >= 0.5).astype(int)
-fig, ax = plt.subplots(figsize=(5, 4))
-ConfusionMatrixDisplay.from_predictions(y_val, xgb_pred, ax=ax, colorbar=False)
-ax.set_title(f"Confusion matrix — XGBoost on val ({VAL_SEASON})")
-plt.tight_layout()
-plt.savefig(PLOT_DIR / "confusion_matrix.png", dpi=120)
-plt.close()
-print(f"Saved {PLOT_DIR / 'confusion_matrix.png'}")
-
-# Predicted probability distribution (XGBoost on val)
+# Predicted probability distribution
 fig, ax = plt.subplots(figsize=(7, 4))
-ax.hist(xgb_prob[y_val == 0], bins=50, alpha=0.6, label="No hit", color="steelblue", density=True)
-ax.hist(xgb_prob[y_val == 1], bins=50, alpha=0.6, label="Hit",    color="tomato",    density=True)
+ax.hist(rules_prob[y_val == 0], bins=50, alpha=0.6, label="No hit", color="steelblue", density=True)
+ax.hist(rules_prob[y_val == 1], bins=50, alpha=0.6, label="Hit",    color="tomato",    density=True)
 ax.axvline(y_train.mean(), color="black", linestyle="--", linewidth=1,
            label=f"Train hit rate ({y_train.mean():.3f})")
 ax.set_xlabel("Predicted probability")
 ax.set_ylabel("Density")
-ax.set_title(f"XGBoost predicted probability distribution — val ({VAL_SEASON})")
+ax.set_title(f"Rules-based predicted probability distribution — val ({VAL_SEASON})")
 ax.legend()
 plt.tight_layout()
 plt.savefig(PLOT_DIR / "predicted_proba_distribution.png", dpi=120)
 plt.close()
 print(f"Saved {PLOT_DIR / 'predicted_proba_distribution.png'}")
 
-# Feature importance (XGBoost, top 20)
-feature_names = num_cols + cat_cols
-
-
-importances = pd.Series(xgb_model.feature_importances_, index=feature_names).sort_values(ascending=True)
-top = importances.tail(20)
-fig, ax = plt.subplots(figsize=(7, max(4, len(top) * 0.35)))
-ax.barh(top.index, top.values, color="steelblue")
-ax.set_title("Feature importance — XGBoost (top 20)")
-ax.set_xlabel("Importance")
-plt.tight_layout()
-plt.savefig(PLOT_DIR / "feature_importance.png", dpi=120)
-plt.close()
-print(f"Saved {PLOT_DIR / 'feature_importance.png'}")
-
-# ── 9. Write baseline_results.md ─────────────────────────────────────────────
-naive_ll = results["Naive baseline"]["log_loss"]
+# ── 8. Write baseline_results.md ─────────────────────────────────────────────
 
 md_lines = [
     f"# Baseline Results — {MODEL_NAME}",
@@ -697,7 +547,8 @@ md_lines = [
     "## Results (evaluated on val)",
     "",
     "Naive baseline predicts the train hit rate for every PA — it sets the floor.",
-    "Improvement vs naive is the real signal that the model is learning something.",
+    "Rules-based baseline is a hand-weighted blend of prev-season BA, this-season",
+    "shrunk rolling BA (k=100), and previous-season BA-by-batting-order-slot.",
     "",
     "| Model | LogLoss | Δ vs Naive | % improvement | Brier | Δ vs Naive |",
     "|-------|---------|------------|---------------|-------|------------|",
@@ -705,38 +556,50 @@ md_lines = [
 for name, res in results.items():
     if name == "Naive baseline":
         ll_d = "—"
-        pct  = "—"
+        pct = "—"
         br_d = "—"
     else:
         ll_d = f"{res['log_loss'] - naive_ll:+.4f}"
-        pct  = f"{(naive_ll - res['log_loss']) / naive_ll * 100:+.2f}%"
-        br_d = f"{res['brier']    - naive_brier:+.4f}"
+        pct = f"{(naive_ll - res['log_loss']) / naive_ll * 100:+.2f}%"
+        br_d = f"{res['brier'] - naive_brier:+.4f}"
     md_lines.append(
         f"| {name} | {res['log_loss']:.4f} | {ll_d} | {pct} | {res['brier']:.4f} | {br_d} |"
     )
 
 md_lines += [
     "",
+    "## Rules-based baseline — component breakdown (val)",
+    "",
+    "| Component | LogLoss | Brier |",
+    "|-----------|---------|-------|",
+]
+for col, label in component_cols.items():
+    p = rules_df.loc[val_df.index, col].to_numpy()
+    p = np.nan_to_num(p, nan=y_train.mean())
+    p = np.clip(p, eps, 1 - eps)
+    ll = log_loss(y_val, p, labels=[0, 1])
+    br = brier_score_loss(y_val, p)
+    md_lines.append(f"| {label} | {ll:.4f} | {br:.4f} |")
+
+md_lines += [
+    "",
     "## Setup",
     "",
-    f"- Features: {FEATURE_COLS}",
     "- last_season_ba: 2016→2017, 2019→2022 (covid gap bridge), then year-over-year",
-    "- Excluded: inning, half_inning, pitch_number (in-game); batter_id/pitcher_id (IDs)",
+    "- Rules-based baseline weights: w_prev=0.4, w_roll=0.4, w_order=0.2, k=100",
     "",
     "## Plots",
     "",
-    "- `plots/baseline/calibration_curve.png` — key diagnostic, quantile bins",
-    "- `plots/baseline/predicted_proba_distribution.png` — sanity check on output spread",
-    "- `plots/baseline/confusion_matrix.png` — informational only at PA level",
-    "- `plots/baseline/feature_importance.png`",
+    "- `plots/baseline-model/calibration_curve.png` — key diagnostic, quantile bins",
+    "- `plots/baseline-model/predicted_proba_distribution.png`",
+    "- `plots/baseline-model/target_distribution.png`",
     "",
     "## Next steps",
     "",
-    "- Add pitcher ERA / WHIP / K-rate features",
-    "- Add rolling batting average windows (7/14/30 day) from feature store",
-    "- Add ballpark and batter×pitcher handedness interaction",
-    "- Aggregate PA-level predictions to game-level for BTS decision evaluation",
-    "- Final evaluation on test season (2025) only once in train.py",
+    "- Look at where the component breakdown is weakest and revisit that rule",
+    "- Tune w_prev/w_roll/w_order and k against val, not by hand-guessing",
+    "- Check bucket-level calibration at the tails specifically",
+    "- Final evaluation on test season (2025) only once, in train.py",
 ]
 
 with open(BASE_DIR / "baseline_results.md", "w") as f:

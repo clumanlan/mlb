@@ -7,8 +7,7 @@ import awswrangler as wr
 import boto3
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
@@ -22,9 +21,11 @@ import xgboost as xgb
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import brier_score_loss
-from sklearn.calibration import calibration_curve
 
+from models.hit_predictor.utils.eval import evaluate_hit_predictor
+
+import sys
+print(sys.path)
 # need to shift play by play count data in the processing 
 # get game_info's that are missing from the playbyplay df
 
@@ -775,91 +776,7 @@ X_val[NUM_FEATS]  = scaler.transform(X_val[NUM_FEATS])
 
 
 # ------------------------------ TRAIN MODELS -------------------------------- #
-def get_calibration_df(y_true, y_prob, n_bins=10):
-    y_true = np.asarray(y_true)
-    y_prob = np.asarray(y_prob)
 
-    bin_edges = np.percentile(y_prob, np.linspace(0, 100, n_bins + 1))
-
-    rows = []
-    for i in range(len(bin_edges) - 1):
-        lo, hi = bin_edges[i], bin_edges[i + 1]
-        mask = (y_prob >= lo) & (y_prob < hi)
-        rows.append(_make_bucket_row(
-            label=f"{lo:.3f}–{hi:.3f}",
-            y_true=y_true[mask],
-            y_prob=y_prob[mask],
-        ))
-
-    return pd.DataFrame(rows)
-
-def plot_calibration_curve(y_true, results: dict, n_bins=10):
-    fig, ax = plt.subplots(figsize=(7, 6))
-    ax.plot([0.15, 0.35], [0.15, 0.35], 'k--', label='Perfect calibration')
-
-    for name, r in results.items():
-        cal_df = get_calibration_df(y_true, r["proba"], n_bins=n_bins)
-        ax.plot(cal_df["mean_pred"], cal_df["obs_hit_rate"], marker='o', label=name)
-
-    ax.set_xlabel("Mean predicted probability")
-    ax.set_ylabel("Observed hit rate")
-    ax.set_title("Calibration Curve")
-    ax.legend()
-    plt.tight_layout()
-    plt.show()
-
-def evaluate_hit_predictor(y_true, y_prob, baseline_prob=None, base_rate=0.22, n_bins=10, min_n=500):
-    y_true = np.asarray(y_true)
-    y_prob = np.asarray(y_prob)
-
-    calibration_df = get_calibration_df(y_true, y_prob, n_bins=n_bins)
-
-    print("=" * 75)
-    print("CALIBRATION TABLE")
-    print("=" * 75)
-    print(calibration_df.to_string(index=False))
-
-    # split into deciles, compare actual hit rate of top vs bottom 10%
-    # large spread = model has real signal, small spread = model isn't separating well
-    print("\n" + "=" * 75)
-    print("DISCRIMINATION METRICS")
-    print("=" * 75)
-    p10, p90    = np.percentile(y_prob, [10, 90])
-    bottom_mask = y_prob <= p10
-    top_mask    = y_prob >= p90
-    bottom_rate = y_true[bottom_mask].mean()
-    top_rate    = y_true[top_mask].mean()
-    print(f"  Decile cutoffs         : bottom {p10:.3f} / top {p90:.3f}")
-    print(f"  Top-decile hit rate    : {top_rate:.3f}  (N={top_mask.sum()})")
-    print(f"  Bottom-decile hit rate : {bottom_rate:.3f}  (N={bottom_mask.sum()})")
-    print(f"  Spread                 : {top_rate - bottom_rate:.3f}")
-
-    # brier score is MSE between predicted prob and actual outcome — lower is better
-    # positive delta = baseline has higher error = model wins
-    print("\n" + "=" * 75)
-    print("BRIER SCORES")
-    print("=" * 75)
-    model_brier = brier_score_loss(y_true, y_prob)
-    print(f"  Model    : {model_brier:.4f}")
-
-    if baseline_prob is not None:
-        baseline_prob  = np.asarray(baseline_prob)
-        baseline_brier = brier_score_loss(y_true, baseline_prob)
-        delta          = baseline_brier - model_brier
-        direction      = "better" if delta > 0 else "worse"
-        print(f"  Baseline : {baseline_brier:.4f}")
-        print(f"  Delta    : {abs(delta):.4f} (model is {direction} than baseline)")
-
-
-def _make_bucket_row(label, y_true, y_prob):
-    return {
-        "bucket":       label,
-        "n":            len(y_true),
-        # mean predicted prob — should track obs_hit_rate if well calibrated
-        "mean_pred":    round(y_prob.mean(), 3),
-        # actual hit rate for rows in this bin
-        "obs_hit_rate": round(y_true.mean(), 3),
-    }
 
 models = {
     "Logistic regression": (LogisticRegression(max_iter=1000, random_state=42), X_train, X_val),
@@ -899,12 +816,6 @@ plot_calibration_curve(
     results
 )
 
-
-# FIGURE OUT TOP FEATURES + RETRAIN 
-
-
-
-# THESE FEATURES SURVIVE INTO NEXT ROUND -----------------------------------
 
 
 
