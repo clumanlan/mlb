@@ -109,6 +109,7 @@ def plot_calibration_curve(y_true, results: dict, n_bins=10, min_n=0, save_path=
     return fig, ax
 
 
+
 def evaluate_hit_predictor(y_true, y_prob, baseline_prob=None, base_rate=0.22,
                             n_bins=10, min_n=500):
     """

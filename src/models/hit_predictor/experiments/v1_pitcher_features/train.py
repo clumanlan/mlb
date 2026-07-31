@@ -21,7 +21,7 @@ import xgboost as xgb
 
 import numpy as np
 import pandas as pd
-
+from sklearn.metrics import brier_score_loss
 from models.hit_predictor.utils.eval import evaluate_hit_predictor
 
 import sys
@@ -803,18 +803,15 @@ evaluate_hit_predictor(y_true=y_val, y_prob=results['XGBoost']['proba'])
 
 pd.Series(results['XGBoost']['proba']).describe()
 
+
+
 # - CHECK BASELINE IF WE'RE FILTERING JUST FOR THOSE WITH BATTING ORDER 
 
 # create plots:
-# - top feature importance
-# - look at top scores
+# - abstract away key processing features
+# - top feature importance - see if any of the features actually matter
+#   - for thsoe that matter abstract those away
 
-
-%matplotlib inline
-plot_calibration_curve(
-    y_val,
-    results
-)
 
 
 
