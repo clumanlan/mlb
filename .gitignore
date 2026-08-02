@@ -35,6 +35,9 @@ terraform/*.tfstate.backup
 /figures/
 /outputs/
 
+# MLflow local tracking store
+mlruns/
+
 # Python
 __pycache__/
 *.py[cod]

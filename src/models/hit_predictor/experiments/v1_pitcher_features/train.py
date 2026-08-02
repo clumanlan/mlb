@@ -22,7 +22,16 @@ import xgboost as xgb
 import numpy as np
 import pandas as pd
 from sklearn.metrics import brier_score_loss
-from models.hit_predictor.utils.eval import evaluate_hit_predictor
+from models.hit_predictor.utils.eval import evaluate_hit_predictor, plot_calibration_curve
+
+import os
+os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+import mlflow
+mlflow.set_tracking_uri("file:./mlruns")
+from models.hit_predictor.utils.mlflow_logging import log_evaluation_to_mlflow, get_git_sha
+
+# Bump by hand as the project progresses (e.g. "v0-baseline" -> "v1-tuned")
+STAGE = "v0-baseline"
 
 import sys
 print(sys.path)
@@ -783,6 +792,19 @@ models = {
     "XGBoost": (xgb.XGBClassifier(n_estimators=100, random_state=42, verbosity=0, eval_metric="logloss"), X_train, X_val),
 }
 
+N_BINS = 10
+MIN_N = 500
+
+PLOT_DIR = BASE_DIR / "plots" / "v1_pitcher_features"
+PLOT_DIR.mkdir(parents=True, exist_ok=True)
+
+BASELINE_RESULTS_MD = BASE_DIR / "baseline_results.md"
+
+MODEL_TYPE_TAGS = {
+    "Logistic regression": "logistic_regression",
+    "XGBoost": "xgboost",
+}
+
 results = {}
 for name, (model, X_train, X_val) in models.items():
     print(f"Training {name}...")
@@ -794,10 +816,45 @@ for name, (model, X_train, X_val) in models.items():
         "proba":    prob,
     }
 
-    
 
-evaluate_hit_predictor(y_true=y_val, y_prob=results['Logistic regression']['proba'])
-evaluate_hit_predictor(y_true=y_val, y_prob=results['XGBoost']['proba'])
+
+for name in ("Logistic regression", "XGBoost"):
+    model, _, _ = models[name]
+    proba = results[name]["proba"]
+
+    metrics = evaluate_hit_predictor(
+        y_true=y_val, y_prob=proba, n_bins=N_BINS, min_n=MIN_N,
+    )
+
+    calibration_plot_path = PLOT_DIR / f"{MODEL_TYPE_TAGS[name]}_calibration_curve.png"
+    plot_calibration_curve(
+        y_val, {name: {"proba": proba}}, n_bins=N_BINS, min_n=MIN_N,
+        save_path=calibration_plot_path,
+    )
+
+    artifact_paths = [str(calibration_plot_path)]
+    if BASELINE_RESULTS_MD.exists():
+        artifact_paths.append(str(BASELINE_RESULTS_MD))
+
+    log_evaluation_to_mlflow(
+        metrics=metrics,
+        params={
+            **model.get_params(),
+            "FIT_SEASONS": FIT_SEASONS,
+            "VAL_SEASON": VAL_SEASON,
+            "TEST_SEASON": TEST_SEASON,
+            "n_bins": N_BINS,
+            "min_n": MIN_N,
+        },
+        tags={
+            "model_type": MODEL_TYPE_TAGS[name],
+            "stage": STAGE,
+            "target": TARGET,
+            "val_season": str(VAL_SEASON),
+            "git_sha": get_git_sha(),
+        },
+        artifact_paths=artifact_paths,
+    )
 
 
 
@@ -809,6 +866,7 @@ pd.Series(results['XGBoost']['proba']).describe()
 
 # create plots:
 # - abstract away key processing features
+# - we should be filtering out those not in the batting order right away
 # - top feature importance - see if any of the features actually matter
 #   - for thsoe that matter abstract those away
 
