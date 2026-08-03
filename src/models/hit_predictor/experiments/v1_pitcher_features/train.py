@@ -452,7 +452,6 @@ last_season_batter_stats = (
     })
 )
 
-pitcher_boxscore.columns.tolist()
 
 # --------------------------- PITCHER BOXSCORE SEASON STATS --------------------------- #
 season_pitcher_stats = (
@@ -855,6 +854,7 @@ for name in ("Logistic regression", "XGBoost"):
         },
         artifact_paths=artifact_paths,
     )
+
 
 
 
