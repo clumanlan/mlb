@@ -294,34 +294,35 @@ def process_pitcher_boxscore(df: pd.DataFrame) -> pd.DataFrame:
     return df.assign(ip=lambda x: convert_ip_to_decimal(x['ip']))
 
 
-def create
+def create_batting_order(batter_boxscore):
 
-
-# ------------------------------- BATTING ORDER ------------------------------ #
-batting_order = (
-    batter_boxscore[~batter_boxscore['batting_order'].isnull()]
-    [["gamepk", "personId", "batting_order"]]
-    .drop_duplicates(subset=["gamepk", "personId"])
-    .rename(columns={"personId": "batter_id"})
-    .assign(
-        batting_order = lambda x: x['batting_order'].astype(int)
+    df = (
+        batter_boxscore[~batter_boxscore['batting_order'].isnull()]
+        [["gamepk", "personId", "batting_order"]]
+        .drop_duplicates(subset=["gamepk", "personId"])
+        .rename(columns={"personId": "batter_id"})
     )
-)
 
-# -------------------------------- PA OUTCOME -------------------------------- #
-pa_outcome = pbp[['gamepk', 'batter_team_name', 'play_id', 'pitcher_id', 'pitcher_name', 'batter_id', 'batter_name', 'is_hit']].drop_duplicates().reset_index(drop=True)
+    return df.assign(batting_order = lambda x: x['batting_order'].astype(int))
 
-pa_outcome = pa_outcome.merge(
-    schedule[["gamepk", "game_date"]].drop_duplicates("gamepk"),
-    on="gamepk", how="left",
-)
-# figure this out later why some game play by plays are missing from game info 
-# Join game_season + weather from game_info
-pa_outcome = pa_outcome.merge(
-    game_info[["gamepk", "game_season", "weather_condition", "weather_temp"]].drop_duplicates("gamepk"),
-    on="gamepk", how="left",
-)
+def create_pa_outcome(pbp, batter_boxscore, game_info, schedule):
 
-pa_outcome = pa_outcome.merge(batting_order, on=["gamepk", "batter_id"], how="left")
+    batting_order = create_batting_order(batter_boxscore)
+    game_info = game_info[["gamepk", "game_season", "weather_condition", "weather_temp"]].drop_duplicates("gamepk")
+    schedule = schedule[["gamepk", "game_date"]].drop_duplicates("gamepk")
+    
+    pa_outcome = pbp[['gamepk', 'batter_team_name', 'play_id', 'pitcher_id', 'pitcher_name', 'batter_id', 'batter_name', 'is_hit']].drop_duplicates().reset_index(drop=True)
 
-pa_outcome = pa_outcome[~pa_outcome['batting_order'].isnull()]
+    pa_outcome = pa_outcome.merge(
+        schedule,
+        on="gamepk", how="left",
+    )
+    # TODO: figure out why some pbp game_pks are missing from game_info
+    pa_outcome = pa_outcome.merge(
+        game_info,
+        on="gamepk", how="left",
+    )
+
+    pa_outcome = pa_outcome.merge(batting_order, on=["gamepk", "batter_id"], how="inner")
+
+    return pa_outcome

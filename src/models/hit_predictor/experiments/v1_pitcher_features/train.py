@@ -377,6 +377,8 @@ pitcher_boxscore = (
         ip = lambda x: x['ip'].apply(convert_ip_to_decimal)
     )
 )
+
+
 # ------------------------------ BATTER BOXSCORE ----------------------------- #
 
 
