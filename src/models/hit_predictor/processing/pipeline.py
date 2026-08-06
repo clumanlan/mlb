@@ -1,114 +1,14 @@
 import pandas as pd 
-
-import yaml
-from datetime import datetime
 from pathlib import Path
 
-import awswrangler as wr
-import boto3
 import numpy as np
 import pandas as pd
-
-import matplotlib.pyplot as plt
-from sklearn.dummy import DummyClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler, OrdinalEncoder
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import log_loss, roc_auc_score, ConfusionMatrixDisplay
-from pathlib import Path
-from sklearn.preprocessing import OneHotEncoder
 
 
 import numpy as np
 import pandas as pd
 
-from schema import PBP
-
-# Bump by hand as the project progresses (e.g. "v0-baseline" -> "v1-tuned")
-STAGE = "v0-baseline"
-
-import sys
-print(sys.path)
-# need to shift play by play count data in the processing 
-# get game_info's that are missing from the playbyplay df
-
-pd.set_option('display.max_columns', None)
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-# ── 1. Config ────────────────────────────────────────────────────────────────
-with open(BASE_DIR / "config.yaml") as f:
-    cfg = yaml.safe_load(f)
-
-BUCKET           = cfg["bucket"]
-REGION           = cfg["region"]
-TRAIN_SEASONS    = cfg["train_seasons"]
-FEATURE_SEASONS  = cfg["feature_seasons"]
-TARGET           = cfg["target_column"]
-DATE_COL         = cfg["date_column"]
-TEST_SEASON      = cfg["test_season"]
-VAL_SEASON       = cfg["val_season"]
-MODEL_NAME       = cfg["model_name"]
-
-
-# Seasons used for model fitting (everything that isn't val or test)
-FIT_SEASONS = [s for s in TRAIN_SEASONS if s not in (VAL_SEASON, TEST_SEASON)]
-
-# have to drop 2017 bc of lagged stats - can fill in later
-FIT_SEASONS.remove(2017)
-
-boto_session = boto3.Session(region_name=REGION)
-
-
-def read_parquet_seasons(path_tpl, seasons, chunked=False):
-    frames = []
-    for season in seasons:
-        path = path_tpl.format(bucket=BUCKET, season=season)
-        print(f"  {path}")
-        if chunked:
-            for chunk in wr.s3.read_parquet(path=path, chunked=True, boto3_session=boto_session):
-                if "spin_direction" in chunk.columns:
-                    chunk["spin_direction"] = chunk["spin_direction"].astype("float64")
-                frames.append(chunk)
-        else:
-            frames.append(wr.s3.read_parquet(path=path, boto3_session=boto_session))
-    return pd.concat(frames, ignore_index=True)
-
-print("\nLoading play-by-play...")
-pbp = read_parquet_seasons(
-    "s3://{bucket}/processed_data/prepared/playbyplay/{season}/",
-    TRAIN_SEASONS,
-    chunked=True,
-)
-
-print("\nLoading schedule...")
-schedule = read_parquet_seasons(
-    "s3://{bucket}/processed_data/games/schedule/{season}/",
-    TRAIN_SEASONS,
-)
-
-all_boxscore_seasons = sorted(set(FEATURE_SEASONS + TRAIN_SEASONS))
-print("\nLoading batter boxscore...")
-batter_boxscore = read_parquet_seasons(
-    "s3://{bucket}/processed_data/prepared/batter_boxscore/{season}/",
-    all_boxscore_seasons,
-)
-
-print("\nLoading pitcher boxscore...")
-pitcher_boxscore = read_parquet_seasons(
-    "s3://{bucket}/processed_data/prepared/pitcher_boxscore/{season}/",
-    all_boxscore_seasons,
-)
-
-
-print("\nLoading player info...")
-player_info = wr.s3.read_parquet(
-    path=f"s3://{BUCKET}/raw_data/reference/player_info/",
-    boto3_session=boto_session,
-)
-# ---------------------------------------------------------------------------- #
-#                                 PROCESS DATA                                 #
-# ---------------------------------------------------------------------------- #
+from models.hit_predictor.processing.schema import PBP 
 
 def process_game_info(df):
 
@@ -125,8 +25,8 @@ def process_game_info(df):
 
     return df
 
-
 def process_schedule(df):
+
     df = (
         df
         .assign(
@@ -140,13 +40,7 @@ def process_schedule(df):
 
     return df 
 
-
-
-
-
-# ------------------------------- PLAY BY PLAY ------------------------------- #
-
-def initial_pbp_processing(df, target_col):
+def _initial_pbp_processing(df, target_col):
     """Row-level pitch features (no ordering/grouping dependency)."""
 
     df = (
@@ -174,7 +68,7 @@ def initial_pbp_processing(df, target_col):
 
     return df
 
-def add_pbp_pitch_state(df):
+def _add_pbp_pitch_state(df):
 
     """Adds is_first_pitch, count_state. Sorts df — must run after initial_pbp_processing,
     before anything that depends on original row order."""  
@@ -200,7 +94,7 @@ def add_pbp_pitch_state(df):
 
     return df
 
-def add_pbp_starting_pitcher(df):
+def _add_pbp_starting_pitcher(df):
 
     """Adds pitcher_role. Starter = first pitcher to throw for a team in the game
     (by play_id order) — doesn't handle openers."""
@@ -229,7 +123,7 @@ def add_pbp_starting_pitcher(df):
 
     return df
 
-def add_pbp_pa(df):
+def _add_pbp_pa(df):
         
     # create plate appearance number 
     ba_pbp_num = (
@@ -250,7 +144,7 @@ def add_pbp_pa(df):
 
     return df 
 
-def add_pbp_game_date(df, schedule):
+def _add_pbp_game_date(df, schedule):
     df = (
         df
         .merge(
@@ -265,22 +159,19 @@ def add_pbp_game_date(df, schedule):
 
     return df 
 
-
 def build_pbp_features(pbp: pd.DataFrame, schedule, target_col: str = "is_hit") -> pd.DataFrame:
 
-    pbp = initial_pbp_processing(pbp, target_col)
-    pbp = add_pbp_pitch_state(pbp)   
-    pbp = add_pbp_starting_pitcher(pbp)
-    pbp = add_pbp_pa(pbp)
-    pbp = add_pbp_game_date(pbp, schedule)
+    pbp = _initial_pbp_processing(pbp, target_col)
+    pbp = _add_pbp_pitch_state(pbp)   
+    pbp = _add_pbp_starting_pitcher(pbp)
+    pbp = _add_pbp_pa(pbp)
+    pbp = _add_pbp_game_date(pbp, schedule)
 
     return pbp
 
-# ----------------------------- PITCHER BOXSCORE ----------------------------- #
-
-def convert_ip_to_decimal(ip: pd.Series) -> pd.Series:
+def _convert_ip_to_decimal(ip: pd.Series) -> pd.Series:
     """Baseball IP format (6.2 = 6 2/3 innings) to decimal."""
-    full_innings = np.floor(ip)
+    full_innings = np.floor(ip).astype('float64')
     partial = (ip - full_innings).round(1)
 
     bad = ~partial.isin([0.0, 0.1, 0.2])
@@ -289,12 +180,10 @@ def convert_ip_to_decimal(ip: pd.Series) -> pd.Series:
 
     return full_innings + (partial / 0.3)
 
-
 def process_pitcher_boxscore(df: pd.DataFrame) -> pd.DataFrame:
-    return df.assign(ip=lambda x: convert_ip_to_decimal(x['ip']))
+    return df.assign(ip=lambda x: _convert_ip_to_decimal(x['ip']))
 
-
-def create_batting_order(batter_boxscore):
+def _create_batting_order(batter_boxscore):
 
     df = (
         batter_boxscore[~batter_boxscore['batting_order'].isnull()]
@@ -307,7 +196,7 @@ def create_batting_order(batter_boxscore):
 
 def create_pa_outcome(pbp, batter_boxscore, game_info, schedule):
 
-    batting_order = create_batting_order(batter_boxscore)
+    batting_order = _create_batting_order(batter_boxscore)
     game_info = game_info[["gamepk", "game_season", "weather_condition", "weather_temp"]].drop_duplicates("gamepk")
     schedule = schedule[["gamepk", "game_date"]].drop_duplicates("gamepk")
     
