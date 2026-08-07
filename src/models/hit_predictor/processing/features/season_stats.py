@@ -1,6 +1,10 @@
 import pandas as pd
 import numpy as np
 
+# Stat definitions, formulas, and "why this stat" rationale: see FEATURE_GLOSSARY.md
+# (src/models/hit_predictor/FEATURE_GLOSSARY.md) — section 5 has a feature-name ->
+# function lookup table. Keep definitions there, not duplicated in this file.
+
 def _shift_to_last_season(df):
     """Shift game_season forward one year and rename season_* -> last_season_*.
 
@@ -16,35 +20,42 @@ def _shift_to_last_season(df):
         .rename(columns={
             col: col.replace('season_', 'last_season_')
             for col in df.columns
-            if col.startswith('season_')
+            if 'season_' in col
         })
     )
 
-def _prefix_stat_pitcher_cols(df: pd.DataFrame, prefix: str, key_cols: list[str] = ['pitcher_id', 'game_season']) -> pd.DataFrame:
+def _prefix_stat_cols(df: pd.DataFrame, prefix: str, key_cols: list[str]) -> pd.DataFrame:
     stat_cols = [c for c in df.columns if c not in key_cols]
     return df.rename(columns={c: f'{prefix}{c}' for c in stat_cols})
 
 def _create_boxscore_batter_stats(batter_boxscore):
-        
+
     df = (
         batter_boxscore
         .groupby(['personId', 'game_season'])
-        [['h',  'k', 'bb', 'hr', 'ab', 'plate_appearances']].sum()
+        [['h',  'k', 'bb', 'hr', 'ab', 'plate_appearances', 'total_bases_from_h']].sum()
         .reset_index()
-        .rename(columns={
-                'h': 'season_batter_total_h',
-                'k': 'season_batter_total_k',
-                'bb': 'season_batter_total_bb',
-                'hr': 'season_batter_total_hr',
-                'ab': 'season_batter_total_ab',
-                'plate_appearances': 'season_batter_total_plate_appearances'
-            })
+    )
+
+    df = _prefix_stat_cols(df, prefix='batter_season_', key_cols=['personId', 'game_season'])
+
+    df = (
+        df
         .assign(
-            season_ba = lambda x: np.round(x['season_batter_total_h']/x['season_batter_total_ab'], 2)
+            batter_season_ba = lambda x: np.round(x['batter_season_h'] / x['batter_season_ab'].replace(0, np.nan), 2),
+            batter_season_slg = lambda x: np.round(x['batter_season_total_bases_from_h'] / x['batter_season_ab'].replace(0, np.nan), 2),
+        )
+        .assign(
+            batter_season_iso = lambda x: np.round(x['batter_season_slg'] - x['batter_season_ba'], 2),
+            batter_season_babip = lambda x: np.round(
+                (x['batter_season_h'] - x['batter_season_hr'])
+                / (x['batter_season_ab'] - x['batter_season_k'] - x['batter_season_hr']).replace(0, np.nan),
+                2
+            ),
         )
     )
 
-    return _shift_to_last_season(df)
+    return df
 
 def build_batter_stats(batter_boxscore):
 
@@ -68,20 +79,18 @@ def build_pitcher_stats(pitcher_boxscore):
                 )
             )
 
-    df = _prefix_stat_pitcher_cols(df, 'pitcher_season_')
+    df = _prefix_stat_cols(df, 'pitcher_season_', key_cols=['pitcher_id', 'game_season'])
 
     return _shift_to_last_season(df)
 
 
 
 # --------------------------- PITCHER PBP SEASON STATS --------------------------- #
-
-# create a longer documentation later:
+# See FEATURE_GLOSSARY.md for stat definitions/rationale. Categories below:
 # - stuff: physical properties of a pitch
 # - command: ability to find the zone
-# - sequencing: is he unpredictable? 
-# - durability: #'s of time through order 
-
+# - sequencing: is he unpredictable?
+# - durability: #'s of time through order
 
 def _create_pitcher_stuff_command_stats(pbp_role):
 
@@ -129,7 +138,7 @@ def _create_pitcher_stuff_command_stats(pbp_role):
     )
 
 
-    return _prefix_stat_pitcher_cols(df, prefix='pitcher_season_')
+    return _prefix_stat_cols(df, prefix='pitcher_season_', key_cols=['pitcher_id', 'game_season'])
 
 def _create_pitcher_pa_outcome_stats(pbp_role: pd.DataFrame) -> pd.DataFrame:
 
@@ -165,7 +174,7 @@ def _create_pitcher_pa_outcome_stats(pbp_role: pd.DataFrame) -> pd.DataFrame:
     C = 3.10  # league average FIP constant, adjusts yearly
     df['fip'] = (13 * df['fip_hr'] + 3 * df['fip_bb'] - 2 * df['fip_k']) / df['total'] + C
 
-    return _prefix_stat_pitcher_cols(df, prefix='pitcher_season_pa_')
+    return _prefix_stat_cols(df, prefix='pitcher_season_pa_', key_cols=['pitcher_id', 'game_season'])
 
 def _create_pitcher_last_inning_stats(pbp_role: pd.DataFrame) -> pd.DataFrame:
 
@@ -185,7 +194,7 @@ def _create_pitcher_last_inning_stats(pbp_role: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    return _prefix_stat_pitcher_cols(df, prefix='pitcher_season_')
+    return _prefix_stat_cols(df, prefix='pitcher_season_', key_cols=['pitcher_id', 'game_season'])
 
 def _create_pitcher_pitch_count_stats(pbp_role):
 
@@ -208,7 +217,7 @@ def _create_pitcher_pitch_count_stats(pbp_role):
         .reset_index()
     ) 
 
-    return _prefix_stat_pitcher_cols(df, prefix='pitcher_season_game_')
+    return _prefix_stat_cols(df, prefix='pitcher_season_game_', key_cols=['pitcher_id', 'game_season'])
 
 def _create_pitcher_contact_quality_stats(pbp_role):
 
@@ -228,7 +237,7 @@ def _create_pitcher_contact_quality_stats(pbp_role):
         .reset_index()
     )
 
-    return _prefix_stat_pitcher_cols(df, prefix='pitcher_season_contact_')
+    return _prefix_stat_cols(df, prefix='pitcher_season_contact_', key_cols=['pitcher_id', 'game_season'])
 
 def build_pbp_pitcher_feats(pbp: pd.DataFrame, pitcher_role: str | None = None) -> pd.DataFrame:
 
@@ -261,6 +270,151 @@ def build_pbp_pitcher_feats(pbp: pd.DataFrame, pitcher_role: str | None = None) 
     return _shift_to_last_season(df)
 
 
+# --------------------------- BATTER PBP SEASON STATS --------------------------- #
+# See FEATURE_GLOSSARY.md section 5 for the feature -> function lookup table.
+
+def _create_batter_pa_outcome_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    last_pitch_pbp = (
+        pbp[pbp['pitch_number'] == pbp.groupby(['gamepk', 'play_id'])['pitch_number'].transform('max')]
+        .reset_index(drop=True)
+    )
+
+    df = (
+        last_pitch_pbp
+        .groupby(['batter_id', 'game_season'])
+        .agg(
+            pitch_count_mean=('pitch_number', 'mean'),
+            pitch_count_std=('pitch_number', 'std'),
+            total=('play_result', 'count'),
+            strikeout_rate=('play_result', lambda x: x.isin({"Strikeout", "Strikeout Double Play"}).mean()),
+            walk_rate=('play_result', lambda x: x.isin({"Walk", "Intent Walk"}).mean()),
+            hbp_rate=('play_result', lambda x: x.eq("Hit By Pitch").mean()),
+            hit_rate=('play_result', lambda x: x.isin({"Single", "Double", "Triple", "Home Run"}).mean()),
+            hr_rate=('play_result', lambda x: x.eq("Home Run").mean()),
+            single_rate=('play_result', lambda x: x.eq("Single").mean()),
+            xbh_rate=('play_result', lambda x: x.isin({"Double", "Triple", "Home Run"}).mean()),
+            avg_final_balls=('count_balls', 'mean'),
+            avg_final_strikes=('count_strikes', 'mean'),
+            full_count_rate=('count_balls', lambda x: ((x == 3) & (last_pitch_pbp.loc[x.index, 'count_strikes'] == 2)).mean()),
+        )
+        .reset_index()
+    )
+
+    return _prefix_stat_cols(df, prefix='batter_season_pa_', key_cols=['batter_id', 'game_season'])
+
+def _create_batter_plate_discipline_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    all_pitches_stats = (
+        pbp
+        .groupby(['batter_id', 'game_season'])
+        .agg(
+            o_swing_rate = ('is_chase', 'mean'),
+            z_swing_rate = ('is_zone_swing', 'mean'),
+            swinging_strike_rate = ('is_swinging_strike', 'mean'),
+            zone_rate = ('zone', lambda x: x.isin(range(1, 10)).mean()),
+        )
+        .reset_index()
+    )
+
+    swings_only = pbp[pbp['is_swing']]
+
+    contact_stats = (
+        swings_only
+        .groupby(['batter_id', 'game_season'])
+        .agg(
+            contact_rate = ('is_swinging_strike', lambda x: (~x).mean()),
+        )
+        .reset_index()
+    )
+
+    df = all_pitches_stats.merge(contact_stats, on=['batter_id', 'game_season'], how='left')
+
+    return _prefix_stat_cols(df, prefix='batter_season_', key_cols=['batter_id', 'game_season'])
+
+def _create_batter_in_play_contact_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    contact_only = pbp[pbp.is_in_play == True]
+
+    df = (
+        contact_only
+        .groupby(['batter_id', 'game_season'])
+        .agg(
+            hard_hit_rate = ('launch_speed', lambda x: (x.dropna() >= 95).mean()),
+            sweet_spot_rate = ('launch_angle', lambda x: x.dropna().between(8, 32).mean()),
+            gb_rate = ('trajectory', lambda x: x.eq('Ground Ball').mean()),
+            fb_rate = ('trajectory', lambda x: x.eq('Fly Ball').mean()),
+            ld_rate = ('trajectory', lambda x: x.eq('Line Drive').mean()),
+            avg_launch_speed = ('launch_speed', 'mean'),
+            avg_launch_angle = ('launch_angle', 'mean'),
+        )
+        .reset_index()
+    )
+
+    return _prefix_stat_cols(df, prefix='batter_season_contact_', key_cols=['batter_id', 'game_season'])
+
+def _create_batter_foul_contact_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    swings_only = pbp[pbp['is_swing']]
+
+    foul_stats = (
+        swings_only
+        .groupby(['batter_id', 'game_season'])
+        .agg(foul_rate = ('pitch_call', lambda x: x.eq('Foul').mean()))
+        .reset_index()
+    )
+
+    contact_only = pbp[(pbp['pitch_call'] == 'Foul') | (pbp['is_in_play'] == True)]
+
+    contact_foul_stats = (
+        contact_only
+        .groupby(['batter_id', 'game_season'])
+        .agg(contact_foul_rate = ('pitch_call', lambda x: x.eq('Foul').mean()))
+        .reset_index()
+    )
+
+    df = foul_stats.merge(contact_foul_stats, on=['batter_id', 'game_season'], how='left')
+
+    return _prefix_stat_cols(df, prefix='batter_season_', key_cols=['batter_id', 'game_season'])
+
+def _create_batter_two_strike_foul_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    two_strike_swings = pbp[(pbp['count_strikes'] == 2) & (pbp['is_swing'])]
+
+    df = (
+        two_strike_swings
+        .groupby(['batter_id', 'game_season'])
+        .agg(two_strike_foul_rate = ('pitch_call', lambda x: x.eq('Foul').mean()))
+        .reset_index()
+    )
+
+    return _prefix_stat_cols(df, prefix='batter_season_', key_cols=['batter_id', 'game_season'])
+
+def build_pbp_batter_feats(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    """Build batter pbp features.
+
+    Args:
+        pbp: Pitch-by-pitch dataframe. No role-filter parameter — unlike
+            build_pbp_pitcher_feats, there's no batter-side equivalent of
+            pitcher_role; batter pbp features run over all pitches unconditionally.
+    """
+
+    batter_pa_outcome_stats = _create_batter_pa_outcome_stats(pbp)
+    batter_plate_discipline_stats = _create_batter_plate_discipline_stats(pbp)
+    batter_in_play_contact_stats = _create_batter_in_play_contact_stats(pbp)
+    batter_foul_contact_stats = _create_batter_foul_contact_stats(pbp)
+    batter_two_strike_foul_stats = _create_batter_two_strike_foul_stats(pbp)
+
+    df = (
+        batter_pa_outcome_stats
+        .merge(batter_plate_discipline_stats, on=['batter_id', 'game_season'], how='left')
+        .merge(batter_in_play_contact_stats, on=['batter_id', 'game_season'], how='left')
+        .merge(batter_foul_contact_stats, on=['batter_id', 'game_season'], how='left')
+        .merge(batter_two_strike_foul_stats, on=['batter_id', 'game_season'], how='left')
+    )
+
+    return _shift_to_last_season(df)
 
 
 

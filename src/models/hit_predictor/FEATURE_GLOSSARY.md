@@ -56,18 +56,22 @@ Everything else is built from these. Statcast (MLB's camera/radar tracking syste
 ### Hard-Hit Rate
 - **What it measures:** % of batted balls with EV ≥ 95mph.
 - **Why this cutoff:** empirically the threshold where outcomes start meaningfully improving — a simpler, single-variable cousin of Barrel% that ignores launch angle.
-- **In this repo:** ✅ have `launch_speed` — computable directly and *more precisely* than the current pitcher-side implementation, which uses the categorical `hardness == 'Hard'` field instead of the raw 95mph threshold.
+- **In this repo:** ✅ implemented — `_create_batter_in_play_contact_stats` → `batter_season_contact_hard_hit_rate`. Uses the raw `launch_speed >= 95` threshold with nulls excluded from the denominator (not counted as "not hard hit"). More precise than the pitcher-side implementation (`_create_pitcher_contact_quality_stats`), which still uses the categorical `hardness == 'Hard'` field instead of the raw threshold.
 
 ### Sweet-Spot %
 - **What it measures:** % of batted balls with launch angle 8°–32° (well-struck line drives/fly balls), regardless of EV.
 - **Why:** isolates the *angle* component of contact quality separately from *speed* — hitting hard and hitting at a good angle are somewhat independent skills.
-- **In this repo:** ✅ have `launch_angle` — computable now, not currently implemented for either pitchers or batters.
+- **In this repo:** ✅ implemented for batters — `_create_batter_in_play_contact_stats` → `batter_season_contact_sweet_spot_rate` (inclusive 8–32° range, nulls excluded from denominator). Not yet implemented on the pitcher side.
 
-### Whiff Rate / Chase Rate (O-Swing%) / Zone Contact%
-- **Whiff%** = swings-and-misses / total swings — bat-missing "stuff" for pitchers, swing-and-miss tendency for hitters.
-- **Chase Rate (O-Swing%)** = % of pitches outside the zone a batter swings at — plate discipline / pitch recognition.
-- **Why separated from overall swing%:** conflates two different skills — aggression inside the zone (good) vs. chasing outside it (bad). Splitting by zone location isolates discipline as its own feature.
-- **In this repo:** ✅ — `is_swinging_strike`, `is_chase`, `is_zone_swing` already exist in `pipeline.py`'s pbp processing and are already used in `_create_pitcher_stuff_command_stats`. Grouping the same flags by `batter_id` instead of `pitcher_id` gives the batter-side version for free.
+### Whiff Rate / Chase Rate (O-Swing%) / Z-Swing% / Contact%
+- **Whiff%** = swings-and-misses / total swings — bat-missing "stuff" for pitchers, swing-and-miss tendency for hitters. *Not currently implemented* — what's built instead is **SwStr%** (below), a related but distinct denominator.
+- **SwStr% (swinging-strike rate)** = swings-and-misses / **all pitches seen** (not swings-only) — the standard FanGraphs definition. ✅ implemented — `_create_batter_plate_discipline_stats` → `batter_season_swinging_strike_rate`.
+- **Chase Rate (O-Swing%)** = swings at pitches outside the zone / **pitches outside the zone**. ⚠️ implemented with a known denominator gap — `_create_batter_plate_discipline_stats` → `batter_season_o_swing_rate` computes `is_chase.mean()` over **all pitches**, not pitches-outside-zone only. Inherited unchanged from the pre-existing pitcher version (`_create_pitcher_stuff_command_stats` → `command_chase_rate`), which has the same gap. Two batters with identical true chase discipline can show different `o_swing_rate` values purely because one saw more out-of-zone pitches than the other. Flagged, not yet fixed — deferred pending a decision on whether to also change the already-shipped pitcher column.
+- **Z-Swing%** = swings at pitches inside the zone / **pitches inside the zone**. Same denominator gap as O-Swing% above — `_create_batter_plate_discipline_stats` → `batter_season_z_swing_rate` also divides by all pitches, not zone-filtered ones.
+- **Zone%** = pitches inside the zone / all pitches seen — this one *is* correctly defined over all pitches by convention (no gap). ✅ implemented — `batter_season_zone_rate`.
+- **Contact%** = contact made (foul or in-play) / **swings only** — distinct from SwStr%'s all-pitches denominator. ✅ implemented — `batter_season_contact_rate`, filtered to `is_swing == True` before aggregating.
+- **Why zone-filtering matters for O-Swing/Z-Swing specifically:** conflates two different skills if not filtered — aggression inside the zone (good) vs. chasing outside it (bad) — the whole point of these stats is to isolate discipline as independent of how often the pitcher even throws in the zone.
+- **In this repo, underlying flags:** `is_swinging_strike`, `is_chase`, `is_zone_swing`, `is_swing` are computed once in `pipeline.py`'s `_initial_pbp_processing` and reused by both pitcher and batter build functions. All three of `is_chase`/`is_zone_swing`/`is_swinging_strike` had real correctness bugs fixed this session (see `tests/hit_predictor/test_pipeline.py`): `is_chase` was gated on whiffs only (missed fouls/in-play swings outside the zone), `is_zone_swing` string-matched a literal `'In Play'` that never appears in real API data, and `is_swinging_strike` was missing `'Missed Bunt'`.
 
 ### Outs Above Average (OAA)
 - **What it measures:** defensive value — outs converted above/below what an average fielder would given play difficulty (distance, time, direction).
@@ -111,18 +115,18 @@ Built from event outcomes (walks, hits, etc.), re-weighted or park/league-adjust
 - **What it measures:** AVG excluding home runs and strikeouts — how often balls in play become hits.
 - **Formula:** `BABIP = (H − HR) / (AB − K − HR + SF)`
 - **Why it's a feature:** league-average BABIP is fairly stable (~.290–.300); a hitter/pitcher far outside that range (absent a persistent-talent explanation like elite speed or Barrel%) is often a regression signal.
-- **In this repo:** ⚠️ have H, HR, AB, K — missing `sf` (sac flies) from `BATTER_BOXSCORE_COLUMNS`. Computable as an approximation without the SF adjustment.
+- **In this repo:** ⚠️ implemented as an approximation — `_create_boxscore_batter_stats` → `batter_season_babip` (zero-denominator-guarded). Missing `sf` (sac flies) from `BATTER_BOXSCORE_COLUMNS`, so the SF adjustment in the formula above is omitted.
 
 ### ISO (Isolated Power)
 - **What it measures:** raw power, separate from average.
 - **Formula:** `ISO = SLG − AVG` (extra bases per at-bat)
 - **Why:** SLG conflates "hits the ball a lot" with "hits for power"; ISO isolates power alone.
-- **In this repo:** ✅ have everything needed (`singles`, `doubles`, `triples`, `hr`, `ab`, `h`) — directly computable now.
+- **In this repo:** ✅ implemented — `_create_boxscore_batter_stats` → `batter_season_iso` (`batter_season_slg − batter_season_ba`, zero-AB-guarded).
 
 ### K% and BB%
 - **What they measure:** strikeouts/walks as % of plate appearances, not raw totals.
 - **Why rate over count:** removes playing-time bias — 500 PA vs. 300 PA naturally produces more Ks; K% lets you compare skill directly.
-- **In this repo:** ✅ already implemented on the pitcher side (`pitcher_season_k_rate`, `pitcher_season_bb_rate`, denominator `ip` rather than PA — worth checking whether PA or IP is the more standard denominator when building the batter equivalent, since batter K%/BB% is conventionally per-PA).
+- **In this repo:** ✅ implemented on both sides, with different (correct-for-each-role) denominators — pitcher side: `pitcher_season_k_rate`/`pitcher_season_bb_rate` (denominator `ip`, since a pitcher's workload is measured in innings). Batter side: `_create_batter_pa_outcome_stats` → `batter_season_pa_strikeout_rate`/`batter_season_pa_walk_rate` (denominator PA, the conventional batter-side denominator, via a last-pitch-of-PA dedup on `(gamepk, play_id)`).
 
 ### WAR (Wins Above Replacement) — fWAR vs. bWAR
 - **What it measures:** total player value (offense + defense + baserunning + positional adjustment + playing time) in wins above a replacement-level player.
@@ -149,15 +153,24 @@ Built from event outcomes (walks, hits, etc.), re-weighted or park/league-adjust
 
 ---
 
-## 5. Implementation Priority for Batter Features
+## 5. Batter Feature Status — Implemented
 
-Given the audit above, the batter build functions should land roughly in this order of effort (cheapest/most template-reuse first):
+All batter season-stat categories originally scoped in this section are now built in `src/models/hit_predictor/processing/features/season_stats.py`, entry point `build_pbp_batter_feats(pbp)` (pbp-derived) plus `build_batter_stats(batter_boxscore)` (box-score-derived). Every function follows the point-in-time-safe pattern: raw stats are computed under a `{stat}` name, then shifted forward one season and renamed to `last_{stat}` by `_shift_to_last_season` at the top-level `build_*` call only — so a season's stats can only be joined onto *next* season's games.
 
-1. **PA outcome rates** (K%, BB%, hit rate, HR rate, XBH rate) — direct copy-adapt of `_create_pitcher_pa_outcome_stats`, group by `batter_id` instead of `pitcher_id`.
-2. **Plate discipline** (O-Swing%, Z-Swing%, SwStr%, Zone%) — same flags as `_create_pitcher_stuff_command_stats`'s command block, regrouped by `batter_id`.
-3. **Contact quality** (hard-hit rate off `launch_speed`, GB/FB/LD rate, sweet-spot%, avg launch speed/angle) — same pattern as `_create_pitcher_contact_quality_stats`; add the 95mph-threshold hard-hit rate and sweet-spot% while at it, since both are already-available columns not yet used anywhere.
-4. **Traditional rate stats** (AVG, SLG, ISO, approximate BABIP) — box score aggregate, mirrors `build_pitcher_stats`. Note the existing `build_batter_stats` double-shift bug should be fixed as part of this work, not carried forward.
-5. **Everything in the ❌ gap column** (xBA/xwOBA, wRC+, park factors, bat tracking, WAR) — explicitly deferred; each needs either a new model, new context data, or new raw ingestion, not just a new feature function.
+**Feature → function lookup** (search `season_stats.py` for the function name to see the exact aggregation):
+
+| Category | Representative columns (post-shift, e.g. via `build_pbp_batter_feats`) | Function |
+|---|---|---|
+| Traditional box-score rates | `batter_last_season_ba`, `_slg`, `_iso`, `_babip` | `build_batter_stats` → `_create_boxscore_batter_stats` |
+| PA outcome rates | `batter_last_season_pa_strikeout_rate`, `_walk_rate`, `_hit_rate`, `_hr_rate`, `_single_rate`, `_xbh_rate`, `_hbp_rate` | `_create_batter_pa_outcome_stats` |
+| Plate discipline | `batter_last_season_o_swing_rate`, `_z_swing_rate`, `_swinging_strike_rate`, `_zone_rate`, `_contact_rate` | `_create_batter_plate_discipline_stats` |
+| In-play contact quality | `batter_last_season_contact_hard_hit_rate`, `_sweet_spot_rate`, `_gb_rate`, `_fb_rate`, `_ld_rate`, `_avg_launch_speed`, `_avg_launch_angle` | `_create_batter_in_play_contact_stats` |
+| Foul-ball contact | `batter_last_season_foul_rate`, `_contact_foul_rate` | `_create_batter_foul_contact_stats` |
+| Two-strike foul rate | `batter_last_season_two_strike_foul_rate` | `_create_batter_two_strike_foul_stats` |
+
+**Known gaps in what's implemented** (documented inline above, not fixed): `o_swing_rate`/`z_swing_rate` use an all-pitches denominator rather than the standard zone-filtered one (see §2, Whiff/Chase/Z-Swing section); BABIP omits the `sf` adjustment (missing column); wOBA/wRC+ remain unbuilt (§3).
+
+**Everything in the ❌ gap column across §1–§4** (xBA/xwOBA, wRC+, park factors, bat tracking, WAR, OAA, catcher framing, sprint speed) remains explicitly deferred — each needs either a new model, new context data, or new raw ingestion, not just a new feature function.
 
 ---
 
@@ -165,9 +178,9 @@ Given the audit above, the batter build functions should land roughly in this or
 
 - **Stability vs. sample size:** Barrel%, K%, BB%, and Hard-Hit% stabilize (become self-predictive) much faster than BA or BABIP. On partial-season data, prefer the "sticky" metrics as leading features and treat outcome-based rate stats (AVG, ERA) with more caution.
 - **xStats vs. actual stats as features:** using both the actual and expected version of a stat (once xwOBA exists here) lets a model implicitly capture "performing above/below expected skill" — a regression-candidate signal.
-- **Avoid leakage — repo-specific:** every `build_*` function in `season_stats.py` already handles this via `_shift_to_last_season`, which shifts `game_season` forward one year and renames `season_*` → `last_season_*` so a season's stats can only be joined onto *next* season's games, never the same one. Any new batter build function must follow the same pattern — shift once, at the top-level `build_*` entry point, not inside a helper (see the existing `build_batter_stats` double-shift bug flagged in section 5).
+- **Avoid leakage — repo-specific:** every `build_*` function in `season_stats.py` handles this via `_shift_to_last_season`, which shifts `game_season` forward one year and renames any column containing `season_` to `last_season_` (e.g. `batter_season_ba` → `batter_last_season_ba`) so a season's stats can only be joined onto *next* season's games, never the same one. Any new build function must follow the same pattern — shift once, at the top-level `build_*` entry point, not inside a private `_create_*` helper.
 - **Data sources:** Baseball Savant (Statcast layer, sections 1–2), FanGraphs (sabermetric layer, section 3, easiest CSV export), Retrosheet (raw play-by-play if computing from scratch). This repo's own raw data comes from the MLB Stats API (`raw_data/games/*`, `raw_data/playbyplay/*`) — confirm which Savant/FanGraphs fields, if any, are already present in that pull before assuming a ❌ gap actually requires a new source.
 
 ---
 
-*Compiled as a feature-engineering reference for `hit_predictor`. Cross-check the "In this repo" column against `src/models/hit_predictor/processing/schema.py` and `src/data/modules/preprocessing.py` if either file changes — this glossary reflects their shape as of the current pitcher-stats implementation.*
+*Compiled as a feature-engineering reference for `hit_predictor`. Cross-check the "In this repo" column against `src/models/hit_predictor/processing/schema.py` and `src/data/modules/preprocessing.py` if either file changes — this glossary reflects their shape as of the completed batter + pitcher season-stats implementation in `season_stats.py`. `season_stats.py` itself points back here in a header comment — the two files are meant to be read together, not duplicated.*

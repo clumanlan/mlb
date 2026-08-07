@@ -52,12 +52,22 @@ def _initial_pbp_processing(df, target_col):
             pitcher_id = lambda x: x["pitcher_id"].astype(str),
             speed_retention = lambda x: x['end_speed'] / x['start_speed'],
             perceived_velo = lambda x: x['start_speed'] * (60.5 / (60.5 - x['extension'])),
-            is_swinging_strike = lambda x: x['pitch_call'].isin(['Swinging Strike', 'Swinging Strike (Blocked)']),
+            is_swinging_strike = lambda x: x['pitch_call'].isin(['Swinging Strike', 'Swinging Strike (Blocked)', 'Missed Bunt']),
             is_called_strike = lambda x: x['pitch_call'] == 'Called Strike',
-            # is chase — swung at a ball outside zone
-            is_chase = lambda x: (x['is_swinging_strike']) & (x['zone'].isin([11, 12, 13, 14])),
-            # is zone swing — swung at a strike
-            is_zone_swing = lambda x: (x['pitch_call'].isin(['Swinging Strike', 'Foul', 'In Play'])) & (x['zone'].between(1, 9)),
+            # is swing — any swing outcome (whiff, foul, or in play). is_in_play is used
+            # rather than string-matching pitch_call's "In play, ..." variants, which differ
+            # by outcome (out(s)/no out/run(s)) and don't match a single literal value.
+            is_swing = lambda x: (
+                x['pitch_call'].isin([
+                    'Swinging Strike', 'Swinging Strike (Blocked)', 'Missed Bunt',
+                    'Foul', 'Foul Tip', 'Foul Bunt',
+                ])
+                | x['is_in_play']
+            ),
+            # is chase — swung at a pitch outside the zone (any contact type, not just whiffs)
+            is_chase = lambda x: (x['is_swing']) & (x['zone'].isin([11, 12, 13, 14])),
+            # is zone swing — swung at a pitch in the zone (any contact type, not just whiffs)
+            is_zone_swing = lambda x: (x['is_swing']) & (x['zone'].between(1, 9)),
             # plate location relative to batter's strike zone (normalized)
             plate_z_normalized = lambda x: (x['plate_z'] - x['strike_zone_bottom']) / (x['strike_zone_top'] - x['strike_zone_bottom']),
             # 0 = bottom of zone, 1 = top, negative = below, >1 = above
