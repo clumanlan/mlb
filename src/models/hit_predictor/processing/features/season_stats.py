@@ -163,7 +163,7 @@ def _create_pitcher_pa_outcome_stats(pbp_role: pd.DataFrame) -> pd.DataFrame:
     )
 
     C = 3.10  # league average FIP constant, adjusts yearly
-    df['pa_fip'] = (13 * df['pa_fip_hr'] + 3 * df['pa_fip_bb'] - 2 * df['pa_fip_k']) / df['pa_total'] + C
+    df['fip'] = (13 * df['fip_hr'] + 3 * df['fip_bb'] - 2 * df['fip_k']) / df['total'] + C
 
     return _prefix_stat_pitcher_cols(df, prefix='pitcher_season_pa_')
 
@@ -225,6 +225,7 @@ def _create_pitcher_contact_quality_stats(pbp_role):
             avg_launch_speed = ('launch_speed', 'mean'),
             avg_launch_angle = ('launch_angle', 'mean'),
         )
+        .reset_index()
     )
 
     return _prefix_stat_pitcher_cols(df, prefix='pitcher_season_contact_')

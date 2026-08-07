@@ -6,7 +6,8 @@
       "Bash(pytest --tb=short -q)",
       "Bash(flake8 . --max-line-length=100 --exclude=.venv,__pycache__,build)",
       "Bash(npx create-vite@latest frontend --template react)",
-      "Bash(pip show *)"
+      "Bash(pip show *)",
+      "WebSearch"
     ]
   }
 }
