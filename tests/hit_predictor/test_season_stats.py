@@ -18,9 +18,12 @@ from models.hit_predictor.processing.features.season_stats import (
     build_league_handedness_stats,
     build_pbp_batter_feats,
     build_pbp_batter_feats_by_pitcher_hand,
+    _pitcher_role_lookup,
     build_pbp_pitcher_feats,
+    build_pbp_pitcher_feats_all_roles,
     build_pbp_pitcher_feats_by_batter_hand,
     build_pitcher_stats,
+    build_pitcher_stats_all_roles,
 )
 
 
@@ -709,7 +712,7 @@ def test_create_pitcher_pa_outcome_stats_extra_group_cols_defaults_to_no_split()
 def _make_full_pitcher_pbp():
     return pd.DataFrame([
         # SP, PA vs LHB: strikeout, not in play
-        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 1, 'pitch_number': 1,
+        {'pitcher_id': '1', 'pitcher_team_id': 'T1', 'game_season': 2023, 'gamepk': '1', 'play_id': 1, 'pitch_number': 1,
          'pitcher_role': 'sp', 'batter_bat_side': 'L',
          'is_first_pitch': True, 'is_strike': True, 'is_ball': False, 'is_called_strike': True,
          'is_chase': False, 'is_zone_swing': False, 'is_swinging_strike': False, 'is_in_play': False,
@@ -720,7 +723,7 @@ def _make_full_pitcher_pbp():
          'inning': 1, 'count_outs': 1, 'is_pitch': True,
          'hardness': None, 'trajectory': None, 'launch_speed': np.nan, 'launch_angle': np.nan},
         # SP, PA vs RHB: single, in play hard-hit line drive
-        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 2, 'pitch_number': 1,
+        {'pitcher_id': '1', 'pitcher_team_id': 'T1', 'game_season': 2023, 'gamepk': '1', 'play_id': 2, 'pitch_number': 1,
          'pitcher_role': 'sp', 'batter_bat_side': 'R',
          'is_first_pitch': True, 'is_strike': False, 'is_ball': False, 'is_called_strike': False,
          'is_chase': False, 'is_zone_swing': True, 'is_swinging_strike': False, 'is_in_play': True,
@@ -731,7 +734,7 @@ def _make_full_pitcher_pbp():
          'inning': 1, 'count_outs': 1, 'is_pitch': True,
          'hardness': 'Hard', 'trajectory': 'Line Drive', 'launch_speed': 100.0, 'launch_angle': 15.0},
         # Bullpen appearance, different game, vs LHB — must be excluded when pitcher_role='sp'
-        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '2', 'play_id': 1, 'pitch_number': 1,
+        {'pitcher_id': '1', 'pitcher_team_id': 'T1', 'game_season': 2023, 'gamepk': '2', 'play_id': 1, 'pitch_number': 1,
          'pitcher_role': 'bullpen', 'batter_bat_side': 'L',
          'is_first_pitch': True, 'is_strike': False, 'is_ball': True, 'is_called_strike': False,
          'is_chase': False, 'is_zone_swing': False, 'is_swinging_strike': False, 'is_in_play': False,
@@ -742,6 +745,65 @@ def _make_full_pitcher_pbp():
          'inning': 9, 'count_outs': 1, 'is_pitch': True,
          'hardness': None, 'trajectory': None, 'launch_speed': np.nan, 'launch_angle': np.nan},
     ])
+
+
+def _make_bullpen_team_pool_pbp():
+    """Pitcher '1' starts a game (gamepk='1', sp), then relieves in a later game
+    (gamepk='2', bullpen) for team 'T1', alongside a DIFFERENT reliever ('2') on
+    the same team in that same game. Proves entity_col='pitcher_team_id' pools
+    bullpen appearances across different pitcher_ids into one row, while sp
+    stays individually keyed — self-contained (no row collisions if reused
+    alongside other fixtures)."""
+    return pd.DataFrame([
+        {'pitcher_id': '1', 'pitcher_team_id': 'T1', 'game_season': 2023, 'gamepk': '1',
+         'play_id': 1, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'batter_bat_side': 'L',
+         'is_first_pitch': True, 'is_strike': True, 'is_ball': False, 'is_called_strike': True,
+         'is_chase': False, 'is_zone_swing': False, 'is_swinging_strike': False, 'is_in_play': False,
+         'start_speed': 95.0, 'end_speed': 87.0, 'perceived_velo': 97.0, 'spin_rate': 2200.0,
+         'movement_magnitude': 8.0, 'pfx_z': 10.0, 'extension': 6.5, 'speed_retention': 0.9,
+         'plate_x': 0.1, 'plate_z_normalized': 0.5, 'zone': 5,
+         'play_result': 'Strikeout', 'count_balls': 0, 'count_strikes': 2,
+         'inning': 1, 'count_outs': 1, 'is_pitch': True,
+         'hardness': None, 'trajectory': None, 'launch_speed': np.nan, 'launch_angle': np.nan},
+        {'pitcher_id': '1', 'pitcher_team_id': 'T1', 'game_season': 2023, 'gamepk': '2',
+         'play_id': 1, 'pitch_number': 1,
+         'pitcher_role': 'bullpen', 'batter_bat_side': 'L',
+         'is_first_pitch': True, 'is_strike': False, 'is_ball': True, 'is_called_strike': False,
+         'is_chase': False, 'is_zone_swing': False, 'is_swinging_strike': False, 'is_in_play': False,
+         'start_speed': 91.0, 'end_speed': 83.0, 'perceived_velo': 93.0, 'spin_rate': 2000.0,
+         'movement_magnitude': 6.0, 'pfx_z': 8.0, 'extension': 6.0, 'speed_retention': 0.9,
+         'plate_x': 1.0, 'plate_z_normalized': 1.5, 'zone': 12,
+         'play_result': 'Walk', 'count_balls': 4, 'count_strikes': 1,
+         'inning': 9, 'count_outs': 1, 'is_pitch': True,
+         'hardness': None, 'trajectory': None, 'launch_speed': np.nan, 'launch_angle': np.nan},
+        {'pitcher_id': '2', 'pitcher_team_id': 'T1', 'game_season': 2023, 'gamepk': '2',
+         'play_id': 2, 'pitch_number': 1,
+         'pitcher_role': 'bullpen', 'batter_bat_side': 'R',
+         'is_first_pitch': True, 'is_strike': False, 'is_ball': False, 'is_called_strike': False,
+         'is_chase': False, 'is_zone_swing': True, 'is_swinging_strike': False, 'is_in_play': True,
+         'start_speed': 90.0, 'end_speed': 82.0, 'perceived_velo': 92.0, 'spin_rate': 1950.0,
+         'movement_magnitude': 5.0, 'pfx_z': 7.0, 'extension': 5.8, 'speed_retention': 0.91,
+         'plate_x': -0.1, 'plate_z_normalized': 0.4, 'zone': 4,
+         'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1,
+         'inning': 9, 'count_outs': 2, 'is_pitch': True,
+         'hardness': 'Hard', 'trajectory': 'Line Drive', 'launch_speed': 98.0, 'launch_angle': 12.0},
+    ])
+
+
+def test_build_pbp_pitcher_feats_pools_bullpen_by_team_when_entity_col_given():
+    """A team's bullpen isn't one identity — entity_col lets the same aggregation
+    code pool ALL of a team's bullpen pitchers into one row instead of keeping
+    them separate by individual pitcher_id."""
+
+    pbp = _make_bullpen_team_pool_pbp()
+
+    result = build_pbp_pitcher_feats(pbp, pitcher_role='bullpen', entity_col='pitcher_team_id')
+
+    assert len(result) == 1
+    assert 'pitcher_team_id' in result.columns
+    assert 'pitcher_id' not in result.columns
+    assert result.iloc[0]['pitcher_last_season_pa_total'] == 2
 
 
 def test_build_pbp_pitcher_feats_by_batter_hand_splits_rates_correctly():
@@ -762,6 +824,97 @@ def test_build_pbp_pitcher_feats_by_batter_hand_respects_pitcher_role_filter():
     row = result.iloc[0]
     # only 1 vs-LHB PA counted (the SP one), not 2 (which would include the bullpen PA)
     assert row['pitcher_last_season_vs_lhb_pa_total'] == 1
+
+
+def test_pitcher_role_lookup_returns_one_row_per_pitcher_per_game():
+    """pitcher_boxscore has no pitcher_role column of its own — this lookup,
+    derived from pbp, is how role gets tagged onto boxscore rows for the
+    never-role-aware pitcher_season_stats/pitcher_rolling_*_stats fix. Must
+    dedupe down to one row per (gamepk, pitcher_id) even though pbp has
+    multiple pitch-level rows per pitcher per game."""
+
+    result = _pitcher_role_lookup(_make_full_pitcher_pbp())
+
+    assert len(result) == 2
+    assert set(result.columns) == {'gamepk', 'pitcher_id', 'pitcher_team_id', 'pitcher_role'}
+
+    bullpen_row = result[result['gamepk'] == '2'].iloc[0]
+    assert bullpen_row['pitcher_role'] == 'bullpen'
+    assert bullpen_row['pitcher_team_id'] == 'T1'
+
+
+def test_build_pitcher_stats_all_roles_pools_bullpen_by_team():
+    """pitcher_season_stats (boxscore-derived) has never been role-aware at
+    all — it blends a pitcher's sp+bullpen appearances into one aggregate and
+    gets joined onto every PA for that pitcher_id regardless of role, same
+    serving-time bug as the pbp-derived stats had, on a different code path
+    (pitcher_boxscore has no pitcher_role column of its own). Two relievers
+    on the same team must pool into one bullpen row keyed by team, not stay
+    separate individual-pitcher rows."""
+
+    pitcher_boxscore = pd.DataFrame([
+        {'personId': '10', 'gamepk': 'g1', 'team_id': 'T1', 'game_season': 2023,
+         'h': 1, 'r': 1, 'er': 1, 'bb': 1, 'hr': 0, 'k': 2, 'p': 20, 's': 12, 'ip': 1.0},
+        {'personId': '11', 'gamepk': 'g1', 'team_id': 'T1', 'game_season': 2023,
+         'h': 2, 'r': 2, 'er': 2, 'bb': 0, 'hr': 1, 'k': 1, 'p': 15, 's': 9, 'ip': 1.0},
+    ])
+    pbp = pd.DataFrame([
+        {'gamepk': 'g1', 'pitcher_id': '10', 'pitcher_team_id': 'T1', 'pitcher_role': 'bullpen'},
+        {'gamepk': 'g1', 'pitcher_id': '11', 'pitcher_team_id': 'T1', 'pitcher_role': 'bullpen'},
+    ])
+
+    result = build_pitcher_stats_all_roles(pitcher_boxscore, pbp)
+
+    bullpen_rows = result[result['pitcher_role'] == 'bullpen']
+    assert len(bullpen_rows) == 1
+    assert bullpen_rows.iloc[0]['pitcher_key_id'] == 'T1'
+    assert bullpen_rows.iloc[0]['pitcher_last_season_h'] == 3  # 1 + 2, pooled across both relievers
+
+
+def test_build_pbp_pitcher_feats_all_roles_pools_bullpen_by_team():
+    """The bullpen half must be team-pooled, not individual-pitcher-keyed —
+    two different relievers on the same team collapse into one bullpen row
+    under a common pitcher_key_id column, while the sp row keeps its own
+    individual pitcher_id under that same column name so both halves can be
+    concatenated and later joined onto PA-level data uniformly."""
+
+    pbp = _make_bullpen_team_pool_pbp()
+
+    result = build_pbp_pitcher_feats_all_roles(pbp)
+
+    assert 'pitcher_key_id' in result.columns
+    assert 'pitcher_id' not in result.columns
+    assert 'pitcher_team_id' not in result.columns
+
+    sp_row = result[result['pitcher_role'] == 'sp'].iloc[0]
+    assert sp_row['pitcher_key_id'] == '1'
+
+    bullpen_rows = result[result['pitcher_role'] == 'bullpen']
+    assert len(bullpen_rows) == 1
+    assert bullpen_rows.iloc[0]['pitcher_key_id'] == 'T1'
+
+
+def test_build_pbp_pitcher_feats_all_roles_tags_and_stacks_both_roles():
+    """The bug this fixes: sp_season_stats was previously joined onto every
+    PA for a pitcher_id regardless of that PA's actual game-context role, so
+    a swingman's starter stats bled into his relief-appearance rows (and no
+    bullpen table existed to give relief PAs their own signal at all).
+    build_pbp_pitcher_feats_all_roles must produce one row per role that
+    actually occurred, each tagged and computed from ONLY that role's PAs —
+    not a blended average across both."""
+
+    result = build_pbp_pitcher_feats_all_roles(_make_full_pitcher_pbp())
+
+    assert len(result) == 2
+    assert set(result['pitcher_role']) == {'sp', 'bullpen'}
+
+    sp_row = result[result['pitcher_role'] == 'sp'].iloc[0]
+    bullpen_row = result[result['pitcher_role'] == 'bullpen'].iloc[0]
+
+    # SP: 1 hit (Single) out of 2 PAs (Strikeout, Single) = 0.5
+    assert sp_row['pitcher_last_season_pa_hit_rate'] == 0.5
+    # bullpen: 1 PA (Walk), not a hit = 0.0 — must not be contaminated by the SP PAs
+    assert bullpen_row['pitcher_last_season_pa_hit_rate'] == 0.0
 
 
 def test_build_pbp_pitcher_feats_by_batter_hand_merges_all_substats():

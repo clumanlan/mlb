@@ -91,11 +91,20 @@ def build_batter_stats(batter_boxscore):
 
     return _shift_to_last_season(df)
 
-def build_pitcher_stats(pitcher_boxscore):
-        
+def _pitcher_role_lookup(pbp: pd.DataFrame) -> pd.DataFrame:
+    """One row per (gamepk, pitcher_id) giving that pitcher's role and team
+    in that game. pitcher_boxscore has no pitcher_role column of its own —
+    this is how role gets tagged onto boxscore rows for the never-role-aware
+    build_pitcher_stats/build_pitcher_rolling_stats team-pooling fix.
+    """
+    return pbp[['gamepk', 'pitcher_id', 'pitcher_team_id', 'pitcher_role']].drop_duplicates()
+
+
+def build_pitcher_stats(pitcher_boxscore, entity_col: str = 'personId'):
+
     df = (
         pitcher_boxscore
-        .groupby(['personId', 'game_season'])
+        .groupby([entity_col, 'game_season'])
         [['h', 'r', 'er', 'bb', 'hr', 'k', 'p', 's', 'ip']].sum()
         .reset_index()
         .assign(
@@ -107,9 +116,54 @@ def build_pitcher_stats(pitcher_boxscore):
                 )
             )
 
-    df = _prefix_stat_cols(df, 'pitcher_season_', key_cols=['personId', 'game_season'])
+    df = _prefix_stat_cols(df, 'pitcher_season_', key_cols=[entity_col, 'game_season'])
 
     return _shift_to_last_season(df)
+
+
+def build_pitcher_stats_all_roles(pitcher_boxscore: pd.DataFrame, pbp: pd.DataFrame) -> pd.DataFrame:
+    """Role-aware version of build_pitcher_stats: sp rows aggregated per
+    individual pitcher as before, bullpen rows pooled by team (a specific
+    reliever's identity isn't knowable pre-game). Both tagged and stacked
+    under a common pitcher_key_id column — see build_pbp_pitcher_feats_all_roles
+    for the same pattern on the pbp-derived stats.
+    """
+
+    # Only pitcher_role is needed from the lookup — pitcher_boxscore already
+    # has its own team_id column, so pulling in pitcher_team_id too would
+    # just collide with it (team_id_x/team_id_y) for no benefit.
+    role_lookup = _pitcher_role_lookup(pbp)[['gamepk', 'pitcher_id', 'pitcher_role']].rename(
+        columns={'pitcher_id': 'personId'}
+    )
+    # personId/gamepk come straight from parquet and may not match pbp's
+    # str-cast id columns in dtype (pitcher_boxscore's gamepk is never cast
+    # to str elsewhere, unlike pbp's) — cast both explicitly before merging,
+    # same defensive pattern as pipeline.py's _add_pbp_handedness.
+    tagged = pitcher_boxscore.assign(
+        personId=lambda x: x['personId'].astype(str), gamepk=lambda x: x['gamepk'].astype(str)
+    ).merge(
+        role_lookup.assign(
+            personId=lambda x: x['personId'].astype(str), gamepk=lambda x: x['gamepk'].astype(str)
+        ),
+        on=['gamepk', 'personId'],
+        how='left',
+    )
+
+    sp_box = tagged[tagged['pitcher_role'] == 'sp']
+    bullpen_box = tagged[tagged['pitcher_role'] == 'bullpen']
+
+    sp = (
+        build_pitcher_stats(sp_box, entity_col='personId')
+        .rename(columns={'personId': 'pitcher_key_id'})
+        .assign(pitcher_role='sp')
+    )
+    bullpen = (
+        build_pitcher_stats(bullpen_box, entity_col='team_id')
+        .rename(columns={'team_id': 'pitcher_key_id'})
+        .assign(pitcher_role='bullpen')
+    )
+
+    return pd.concat([sp, bullpen], ignore_index=True)
 
 
 
@@ -120,9 +174,9 @@ def build_pitcher_stats(pitcher_boxscore):
 # - sequencing: is he unpredictable?
 # - durability: #'s of time through order
 
-def _create_pitcher_stuff_command_stats(pbp_role, extra_group_cols: list[str] | None = None):
+def _create_pitcher_stuff_command_stats(pbp_role, entity_col: str = 'pitcher_id', extra_group_cols: list[str] | None = None):
 
-    group_cols = ['pitcher_id', 'game_season'] + (extra_group_cols or [])
+    group_cols = [entity_col, 'game_season'] + (extra_group_cols or [])
 
     pbp_role['is_first_pitch_strike'] = (
         pbp_role['is_first_pitch'] & pbp_role['is_strike']
@@ -170,9 +224,9 @@ def _create_pitcher_stuff_command_stats(pbp_role, extra_group_cols: list[str] | 
 
     return _prefix_stat_cols(df, prefix='pitcher_season_', key_cols=group_cols)
 
-def _create_pitcher_pa_outcome_stats(pbp_role: pd.DataFrame, extra_group_cols: list[str] | None = None) -> pd.DataFrame:
+def _create_pitcher_pa_outcome_stats(pbp_role: pd.DataFrame, entity_col: str = 'pitcher_id', extra_group_cols: list[str] | None = None) -> pd.DataFrame:
 
-    group_cols = ['pitcher_id', 'game_season'] + (extra_group_cols or [])
+    group_cols = [entity_col, 'game_season'] + (extra_group_cols or [])
 
     last_pitch_pbp = (
         pbp_role[pbp_role['pitch_number'] == pbp_role.groupby(['gamepk', 'play_id'])['pitch_number'].transform('max')]
@@ -208,9 +262,9 @@ def _create_pitcher_pa_outcome_stats(pbp_role: pd.DataFrame, extra_group_cols: l
 
     return _prefix_stat_cols(df, prefix='pitcher_season_pa_', key_cols=group_cols)
 
-def _create_pitcher_last_inning_stats(pbp_role: pd.DataFrame, extra_group_cols: list[str] | None = None) -> pd.DataFrame:
+def _create_pitcher_last_inning_stats(pbp_role: pd.DataFrame, entity_col: str = 'pitcher_id', extra_group_cols: list[str] | None = None) -> pd.DataFrame:
 
-    group_cols = ['pitcher_id', 'game_season'] + (extra_group_cols or [])
+    group_cols = [entity_col, 'game_season'] + (extra_group_cols or [])
 
     last_pitch_pbp = (
         pbp_role[pbp_role['pitch_number'] == pbp_role.groupby(['gamepk', 'play_id'])['pitch_number'].transform('max')]
@@ -218,7 +272,7 @@ def _create_pitcher_last_inning_stats(pbp_role: pd.DataFrame, extra_group_cols: 
     )
 
     df = (
-        last_pitch_pbp.loc[last_pitch_pbp.groupby(['pitcher_id', 'gamepk'])['play_id'].idxmax()]
+        last_pitch_pbp.loc[last_pitch_pbp.groupby([entity_col, 'gamepk'])['play_id'].idxmax()]
         .groupby(group_cols)
         .agg(
             avg_last_inning=('inning', 'mean'),
@@ -235,13 +289,13 @@ def _create_pitcher_last_inning_stats(pbp_role: pd.DataFrame, extra_group_cols: 
 
     return _prefix_stat_cols(df, prefix='pitcher_season_', key_cols=group_cols)
 
-def _create_pitcher_pitch_count_stats(pbp_role, extra_group_cols: list[str] | None = None):
+def _create_pitcher_pitch_count_stats(pbp_role, entity_col: str = 'pitcher_id', extra_group_cols: list[str] | None = None):
 
-    group_cols = ['pitcher_id', 'game_season'] + (extra_group_cols or [])
+    group_cols = [entity_col, 'game_season'] + (extra_group_cols or [])
 
     game_pitch_totals = (
         pbp_role
-        .groupby(['pitcher_id', 'gamepk', 'game_season'] + (extra_group_cols or []))['is_pitch']
+        .groupby([entity_col, 'gamepk', 'game_season'] + (extra_group_cols or []))['is_pitch']
         .sum()
         .reset_index()
         .rename(columns={'is_pitch':'total_pitches'})
@@ -260,9 +314,9 @@ def _create_pitcher_pitch_count_stats(pbp_role, extra_group_cols: list[str] | No
 
     return _prefix_stat_cols(df, prefix='pitcher_season_game_', key_cols=group_cols)
 
-def _create_pitcher_contact_quality_stats(pbp_role, extra_group_cols: list[str] | None = None):
+def _create_pitcher_contact_quality_stats(pbp_role, entity_col: str = 'pitcher_id', extra_group_cols: list[str] | None = None):
 
-    group_cols = ['pitcher_id', 'game_season'] + (extra_group_cols or [])
+    group_cols = [entity_col, 'game_season'] + (extra_group_cols or [])
 
     contact_only = pbp_role[pbp_role.is_in_play == True]
 
@@ -282,13 +336,17 @@ def _create_pitcher_contact_quality_stats(pbp_role, extra_group_cols: list[str] 
 
     return _prefix_stat_cols(df, prefix='pitcher_season_contact_', key_cols=group_cols)
 
-def build_pbp_pitcher_feats(pbp: pd.DataFrame, pitcher_role: str | None = None) -> pd.DataFrame:
+def build_pbp_pitcher_feats(pbp: pd.DataFrame, pitcher_role: str | None = None, entity_col: str = 'pitcher_id') -> pd.DataFrame:
 
     """Build pitcher pbp features.
 
     Args:
         pbp: Pitch-by-pitch dataframe with pitcher_role column.
         pitcher_role: 'sp', 'bullpen', or None for all appearances.
+        entity_col: column to group by — 'pitcher_id' (default) for per-pitcher
+            stats, or 'pitcher_team_id' to pool all of a team's appearances
+            (e.g. bullpen, whose specific pitcher isn't knowable pre-game) into
+            one row instead of one per individual pitcher.
     """
 
     if pitcher_role is not None:
@@ -296,21 +354,56 @@ def build_pbp_pitcher_feats(pbp: pd.DataFrame, pitcher_role: str | None = None) 
 
     pbp = pbp.assign(is_first_pitch_strike = lambda x: x['is_first_pitch'] & x['is_strike'])
 
-    pitcher_stuff_command_stats = _create_pitcher_stuff_command_stats(pbp)
-    pitcher_pa_outcome_stats = _create_pitcher_pa_outcome_stats(pbp)
-    pitcher_last_inning_stats = _create_pitcher_last_inning_stats(pbp)
-    pitcher_pitch_count_stats = _create_pitcher_pitch_count_stats(pbp)
-    pitcher_contact_quality_stats = _create_pitcher_contact_quality_stats(pbp)
+    pitcher_stuff_command_stats = _create_pitcher_stuff_command_stats(pbp, entity_col=entity_col)
+    pitcher_pa_outcome_stats = _create_pitcher_pa_outcome_stats(pbp, entity_col=entity_col)
+    pitcher_last_inning_stats = _create_pitcher_last_inning_stats(pbp, entity_col=entity_col)
+    pitcher_pitch_count_stats = _create_pitcher_pitch_count_stats(pbp, entity_col=entity_col)
+    pitcher_contact_quality_stats = _create_pitcher_contact_quality_stats(pbp, entity_col=entity_col)
 
     df = (
         pitcher_stuff_command_stats
-        .merge(pitcher_pa_outcome_stats, on=['pitcher_id','game_season'], how='left')
-        .merge(pitcher_last_inning_stats, on=['pitcher_id','game_season'], how='left')
-        .merge(pitcher_pitch_count_stats,  on=['pitcher_id','game_season'], how='left')
-        .merge(pitcher_contact_quality_stats,  on=['pitcher_id','game_season'], how='left')
+        .merge(pitcher_pa_outcome_stats, on=[entity_col,'game_season'], how='left')
+        .merge(pitcher_last_inning_stats, on=[entity_col,'game_season'], how='left')
+        .merge(pitcher_pitch_count_stats,  on=[entity_col,'game_season'], how='left')
+        .merge(pitcher_contact_quality_stats,  on=[entity_col,'game_season'], how='left')
     )
 
     return _shift_to_last_season(df)
+
+
+def build_pbp_pitcher_feats_all_roles(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    """Build pitcher pbp features for both roles, each row tagged with which
+    role it represents, so the result can be joined onto PA-level data on
+    ['pitcher_key_id', 'game_season', 'pitcher_role'] instead of ['pitcher_id',
+    'game_season'] alone. A PA that happened while this pitcher was relieving
+    then picks up his bullpen stats rather than his (irrelevant) starter
+    stats — the bug this fixes: swingmen who both start and relieve in the
+    same season previously had their starter aggregate attached to every PA
+    regardless of that PA's actual game-context role, and no bullpen table
+    existed at all.
+
+    The bullpen half is pooled by team (entity_col='pitcher_team_id') rather
+    than kept per individual pitcher_id: at prediction time the starter is
+    known pre-game, but which specific reliever will face a given batter is
+    not, so an individual-pitcher bullpen feature would rely on information
+    unavailable at serving time. Both halves are renamed to a common
+    pitcher_key_id column (sp -> that pitcher's own id, bullpen -> his team's
+    id) so they can be concatenated and merged onto PA-level data uniformly.
+    """
+
+    sp = (
+        build_pbp_pitcher_feats(pbp, pitcher_role='sp')
+        .rename(columns={'pitcher_id': 'pitcher_key_id'})
+        .assign(pitcher_role='sp')
+    )
+    bullpen = (
+        build_pbp_pitcher_feats(pbp, pitcher_role='bullpen', entity_col='pitcher_team_id')
+        .rename(columns={'pitcher_team_id': 'pitcher_key_id'})
+        .assign(pitcher_role='bullpen')
+    )
+
+    return pd.concat([sp, bullpen], ignore_index=True)
 
 
 # --------------------------- HANDEDNESS SPLIT: PITCHER VS BATTER HAND --------------------------- #

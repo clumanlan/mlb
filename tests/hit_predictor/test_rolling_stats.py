@@ -10,7 +10,9 @@ from models.hit_predictor.processing.features.rolling_stats import (
     _validate_window,
     build_batter_rolling_stats,
     build_pitcher_rolling_stats,
+    build_pitcher_rolling_stats_all_roles,
     build_pbp_pitcher_rolling_feats,
+    build_pbp_pitcher_rolling_feats_all_roles,
     build_pbp_batter_rolling_feats,
 )
 
@@ -341,7 +343,7 @@ def test_build_pitcher_rolling_stats_divide_by_zero_guarded():
 def _pitch_row(pitcher_id='1', gamepk='g1', game_date='2023-04-01', game_season=2023,
                 play_id=1, pitch_number=1, **overrides):
     row = {
-        'pitcher_id': pitcher_id, 'gamepk': gamepk,
+        'pitcher_id': pitcher_id, 'pitcher_team_id': 'T1', 'gamepk': gamepk,
         'game_date': pd.Timestamp(game_date), 'game_season': game_season,
         'play_id': play_id, 'pitch_number': pitch_number,
         'pitcher_role': 'sp',
@@ -528,6 +530,166 @@ def test_build_pbp_pitcher_rolling_feats_pitcher_role_filter():
     # only the sp game (g2) should feed g3's rolled stat -> exactly 95.0, not blended with bullpen's 80.0
     row3 = result.loc[result['gamepk'] == 'g3']
     assert row3['pitcher_roll_last10g_stuff_start_speed_mean'].iloc[0] == pytest.approx(95.0)
+
+
+def test_build_pitcher_rolling_stats_all_roles_pools_bullpen_by_team():
+    """Rolling equivalent of season_stats.build_pitcher_stats_all_roles:
+    pitcher_rolling_season_stats/pitcher_rolling_short_stats have never been
+    role-aware — bullpen rows must roll forward pooled by team, not stay
+    separate by individual reliever."""
+
+    pitcher_boxscore = pd.DataFrame([
+        {'personId': '99', 'gamepk': 'g0', 'team_id': 'T1', 'game_season': 2023,
+         'game_date': pd.Timestamp('2023-03-30'),
+         'h': 5, 'r': 3, 'er': 3, 'bb': 2, 'hr': 1, 'k': 6, 'p': 90, 's': 60, 'ip': 6.0},
+        {'personId': '10', 'gamepk': 'g1', 'team_id': 'T1', 'game_season': 2023,
+         'game_date': pd.Timestamp('2023-04-01'),
+         'h': 1, 'r': 1, 'er': 1, 'bb': 1, 'hr': 0, 'k': 2, 'p': 20, 's': 12, 'ip': 1.0},
+        {'personId': '11', 'gamepk': 'g2', 'team_id': 'T1', 'game_season': 2023,
+         'game_date': pd.Timestamp('2023-04-02'),
+         'h': 2, 'r': 2, 'er': 2, 'bb': 0, 'hr': 1, 'k': 1, 'p': 15, 's': 9, 'ip': 1.0},
+        {'personId': '10', 'gamepk': 'g3', 'team_id': 'T1', 'game_season': 2023,
+         'game_date': pd.Timestamp('2023-04-03'),
+         'h': 0, 'r': 0, 'er': 0, 'bb': 0, 'hr': 0, 'k': 1, 'p': 10, 's': 7, 'ip': 1.0},
+    ])
+    pbp = pd.DataFrame([
+        {'gamepk': 'g0', 'pitcher_id': '99', 'pitcher_team_id': 'T1', 'pitcher_role': 'sp'},
+        {'gamepk': 'g1', 'pitcher_id': '10', 'pitcher_team_id': 'T1', 'pitcher_role': 'bullpen'},
+        {'gamepk': 'g2', 'pitcher_id': '11', 'pitcher_team_id': 'T1', 'pitcher_role': 'bullpen'},
+        {'gamepk': 'g3', 'pitcher_id': '10', 'pitcher_team_id': 'T1', 'pitcher_role': 'bullpen'},
+    ])
+
+    result = build_pitcher_rolling_stats_all_roles(pitcher_boxscore, pbp, window=10)
+
+    bullpen_rows = result[result['pitcher_role'] == 'bullpen']
+    row_g3 = bullpen_rows[bullpen_rows['gamepk'] == 'g3'].iloc[0]
+    # g3 is team T1's 3rd bullpen game -> rolls forward BOTH g1 (h=1, pitcher '10')
+    # and g2 (h=2, pitcher '11') pooled together: sum = 3, not just pitcher '10's own history
+    assert row_g3['pitcher_roll_last10g_h'] == 3
+    assert row_g3['pitcher_key_id'] == 'T1'
+
+
+def test_build_pitcher_rolling_stats_all_roles_collapses_multiple_relievers_per_game_before_rolling():
+    """pitcher_boxscore has ONE ROW PER INDIVIDUAL PITCHER PER GAME, not one
+    row per team per game — a real bullpen outing routinely uses 2+
+    relievers in the same game. build_pitcher_rolling_stats/_rolling_sum
+    operate via .transform(), which preserves one output row per INPUT row
+    rather than collapsing to one per (team, game) first. Without an
+    explicit per-team-per-game collapse before rolling: (a) every downstream
+    PA-level join fans out (multiple duplicate team-game rows all matching
+    the same join key), and (b) shift(1) corrupts across teammates sharing
+    the same game_date instead of skipping the whole game. Must collapse to
+    one row per (team, game) — summing all relievers' stats — before rolling,
+    the same way the pbp-derived per-game layer already does."""
+
+    pitcher_boxscore = pd.DataFrame([
+        {'personId': '99', 'gamepk': 'g0', 'team_id': 'T1', 'game_season': 2023,
+         'game_date': pd.Timestamp('2023-03-30'),
+         'h': 5, 'r': 3, 'er': 3, 'bb': 2, 'hr': 1, 'k': 6, 'p': 90, 's': 60, 'ip': 6.0},
+        # game g1: TWO relievers for team T1 on the SAME day
+        {'personId': '10', 'gamepk': 'g1', 'team_id': 'T1', 'game_season': 2023,
+         'game_date': pd.Timestamp('2023-04-01'),
+         'h': 1, 'r': 1, 'er': 1, 'bb': 1, 'hr': 0, 'k': 2, 'p': 20, 's': 12, 'ip': 1.0},
+        {'personId': '11', 'gamepk': 'g1', 'team_id': 'T1', 'game_season': 2023,
+         'game_date': pd.Timestamp('2023-04-01'),
+         'h': 2, 'r': 2, 'er': 2, 'bb': 0, 'hr': 1, 'k': 1, 'p': 15, 's': 9, 'ip': 1.0},
+        # game g2: ONE reliever for team T1, later
+        {'personId': '12', 'gamepk': 'g2', 'team_id': 'T1', 'game_season': 2023,
+         'game_date': pd.Timestamp('2023-04-02'),
+         'h': 0, 'r': 0, 'er': 0, 'bb': 0, 'hr': 0, 'k': 1, 'p': 10, 's': 7, 'ip': 1.0},
+    ])
+    pbp = pd.DataFrame([
+        {'gamepk': 'g0', 'pitcher_id': '99', 'pitcher_team_id': 'T1', 'pitcher_role': 'sp'},
+        {'gamepk': 'g1', 'pitcher_id': '10', 'pitcher_team_id': 'T1', 'pitcher_role': 'bullpen'},
+        {'gamepk': 'g1', 'pitcher_id': '11', 'pitcher_team_id': 'T1', 'pitcher_role': 'bullpen'},
+        {'gamepk': 'g2', 'pitcher_id': '12', 'pitcher_team_id': 'T1', 'pitcher_role': 'bullpen'},
+    ])
+
+    result = build_pitcher_rolling_stats_all_roles(pitcher_boxscore, pbp, window=10)
+
+    bullpen_rows = result[result['pitcher_role'] == 'bullpen']
+    # exactly one row per (team, game) — not one per individual reliever
+    assert len(bullpen_rows[bullpen_rows['gamepk'] == 'g1']) == 1
+    row_g2 = bullpen_rows[bullpen_rows['gamepk'] == 'g2'].iloc[0]
+    # g2 rolls forward g1's TEAM TOTAL (h = 1 + 2 = 3), not a per-reliever fragment
+    assert row_g2['pitcher_roll_last10g_h'] == 3
+
+
+def test_build_pbp_pitcher_rolling_feats_pools_bullpen_by_team_when_entity_col_given():
+    """Two different bullpen pitchers on the same team must roll forward
+    pooled together under entity_col='pitcher_team_id', not stay separate by
+    individual pitcher_id — at prediction time you know the team but not
+    which specific reliever will face a given batter."""
+
+    df = pd.DataFrame([
+        _pitch_row(pitcher_id='1', gamepk='g1', game_date='2023-04-01', pitcher_role='bullpen', start_speed=80.0),
+        _pitch_row(pitcher_id='2', gamepk='g2', game_date='2023-04-02', pitcher_role='bullpen', start_speed=90.0),
+        _pitch_row(pitcher_id='1', gamepk='g3', game_date='2023-04-03', pitcher_role='bullpen', start_speed=100.0),
+    ])
+
+    result = build_pbp_pitcher_rolling_feats(df, window=10, pitcher_role='bullpen', entity_col='pitcher_team_id')
+
+    # g3 is the TEAM's 3rd bullpen game -> rolls forward BOTH g1 (80, pitcher '1')
+    # and g2 (90, pitcher '2') pooled together: mean = 85.0, not just pitcher '1's own history
+    row3 = result[result['gamepk'] == 'g3'].iloc[0]
+    assert row3['pitcher_roll_last10g_stuff_start_speed_mean'] == pytest.approx(85.0)
+
+
+def test_build_pbp_pitcher_rolling_feats_all_roles_pools_bullpen_by_team():
+    """The bullpen half must be team-pooled (entity_col='pitcher_team_id'),
+    not individual-pitcher-keyed — two different relievers on the same team
+    roll forward together under a common pitcher_key_id column."""
+
+    df = pd.DataFrame([
+        _pitch_row(pitcher_id='1', gamepk='g1', game_date='2023-04-01', pitcher_role='sp'),
+        _pitch_row(pitcher_id='2', gamepk='g2', game_date='2023-04-02', pitcher_role='bullpen', start_speed=80.0),
+        _pitch_row(pitcher_id='3', gamepk='g3', game_date='2023-04-03', pitcher_role='bullpen', start_speed=90.0),
+        _pitch_row(pitcher_id='2', gamepk='g4', game_date='2023-04-04', pitcher_role='bullpen', start_speed=100.0),
+    ])
+
+    result = build_pbp_pitcher_rolling_feats_all_roles(df, window=10)
+
+    assert 'pitcher_key_id' in result.columns
+    assert 'pitcher_id' not in result.columns
+    assert 'pitcher_team_id' not in result.columns
+
+    sp_row = result[result['pitcher_role'] == 'sp'].iloc[0]
+    assert sp_row['pitcher_key_id'] == '1'
+
+    # g4 is team T1's 3rd bullpen game -> rolls forward BOTH g2 (80, pitcher '2')
+    # and g3 (90, pitcher '3') pooled together, keyed by team not individual pitcher
+    bullpen_g4 = result[(result['pitcher_role'] == 'bullpen') & (result['pitcher_key_id'] == 'T1')]
+    assert len(bullpen_g4[bullpen_g4['gamepk'] == 'g4']) == 1
+    row_g4 = bullpen_g4[bullpen_g4['gamepk'] == 'g4'].iloc[0]
+    assert row_g4['pitcher_roll_last10g_stuff_start_speed_mean'] == pytest.approx(85.0)
+
+
+def test_build_pbp_pitcher_rolling_feats_all_roles_tags_and_stacks_both_roles():
+    """The rolling equivalent of season_stats' build_pbp_pitcher_feats_all_roles
+    fix: a swingman's SP-role rolling stat and bullpen-role rolling stat must
+    each roll forward from ONLY that role's own prior games — not blended
+    together — and both roles must appear as separately tagged rows so a PA
+    can be joined to the one matching its own game-context role."""
+
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', pitcher_role='bullpen', start_speed=80.0),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', pitcher_role='sp', start_speed=95.0),
+        _pitch_row(gamepk='g3', game_date='2023-04-03', pitcher_role='sp', start_speed=100.0),
+        _pitch_row(gamepk='g4', game_date='2023-04-04', pitcher_role='bullpen', start_speed=85.0),
+    ])
+
+    result = build_pbp_pitcher_rolling_feats_all_roles(df, window=10)
+
+    assert set(result['pitcher_role']) == {'sp', 'bullpen'}
+
+    # g3 is this pitcher's 2nd SP game -> rolls forward only g2's (sp) 95.0
+    sp_row = result[(result['gamepk'] == 'g3') & (result['pitcher_role'] == 'sp')].iloc[0]
+    assert sp_row['pitcher_roll_last10g_stuff_start_speed_mean'] == pytest.approx(95.0)
+
+    # g4 is this pitcher's 2nd bullpen game -> rolls forward only g1's (bullpen) 80.0,
+    # not contaminated by the sp games at g2/g3
+    bullpen_row = result[(result['gamepk'] == 'g4') & (result['pitcher_role'] == 'bullpen')].iloc[0]
+    assert bullpen_row['pitcher_roll_last10g_stuff_start_speed_mean'] == pytest.approx(80.0)
 
 
 def test_build_pbp_pitcher_rolling_feats_pa_pitch_count_mean_uses_rolled_totals():

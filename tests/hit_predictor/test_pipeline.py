@@ -1,6 +1,10 @@
 import pandas as pd
 
-from models.hit_predictor.processing.pipeline import _add_pbp_handedness, _initial_pbp_processing
+from models.hit_predictor.processing.pipeline import (
+    _add_pbp_handedness,
+    _initial_pbp_processing,
+    create_pa_outcome,
+)
 
 
 def _make_pbp_row(**overrides):
@@ -122,3 +126,131 @@ def test_add_pbp_handedness_joins_despite_int_vs_str_id_dtype_mismatch():
 
     assert result.loc[0, 'pitcher_throw_hand'] == 'L'
     assert result.loc[0, 'batter_bat_side'] == 'L'
+
+
+def test_create_pa_outcome_includes_batter_and_pitcher_hand():
+    """pitcher_throw_hand and batter_bat_side are computed onto pbp by
+    _add_pbp_handedness before create_pa_outcome runs, but create_pa_outcome's
+    column selection dropped them — the strongest, cheapest platoon-split
+    signal in the dataset never made it to the model. Both must survive into
+    pa_outcome's output, with values matching the source pbp row (not
+    swapped between batter/pitcher)."""
+
+    pbp = pd.DataFrame([{
+        'gamepk': '1',
+        'batter_team_name': 'Cubs',
+        'play_id': 'p1',
+        'pitcher_id': '10',
+        'pitcher_name': 'Pitcher One',
+        'batter_id': '1',
+        'batter_name': 'Batter One',
+        'is_hit': 1,
+        'pitcher_throw_hand': 'L',
+        'batter_bat_side': 'S',
+        'pitcher_role': 'sp',
+        'pitcher_team_id': 'T1',
+    }])
+    batter_boxscore = pd.DataFrame([{
+        'gamepk': '1',
+        'personId': '1',
+        'batting_order': 3,
+    }])
+    game_info = pd.DataFrame([{
+        'gamepk': '1',
+        'game_season': 2023,
+        'weather_condition': 'Sunny',
+        'weather_temp': '75',
+    }])
+    schedule = pd.DataFrame([{
+        'gamepk': '1',
+        'game_date': pd.Timestamp('2023-05-01'),
+    }])
+
+    result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
+
+    assert result.loc[0, 'pitcher_throw_hand'] == 'L'
+    assert result.loc[0, 'batter_bat_side'] == 'S'
+
+
+def test_create_pa_outcome_includes_pitcher_role():
+    """pitcher_role ('sp'/'bullpen') is computed onto pbp by
+    _add_pbp_starting_pitcher before create_pa_outcome runs, but was never
+    selected into pa_outcome's output — without it, downstream code has no
+    way to tell whether a given PA happened while this pitcher was starting
+    or relieving, which is what causes starter stats to get misapplied to
+    relief appearances for swingman pitchers."""
+
+    pbp = pd.DataFrame([{
+        'gamepk': '1',
+        'batter_team_name': 'Cubs',
+        'play_id': 'p1',
+        'pitcher_id': '10',
+        'pitcher_name': 'Pitcher One',
+        'batter_id': '1',
+        'batter_name': 'Batter One',
+        'is_hit': 1,
+        'pitcher_throw_hand': 'L',
+        'batter_bat_side': 'S',
+        'pitcher_role': 'bullpen',
+        'pitcher_team_id': 'T1',
+    }])
+    batter_boxscore = pd.DataFrame([{
+        'gamepk': '1',
+        'personId': '1',
+        'batting_order': 3,
+    }])
+    game_info = pd.DataFrame([{
+        'gamepk': '1',
+        'game_season': 2023,
+        'weather_condition': 'Sunny',
+        'weather_temp': '75',
+    }])
+    schedule = pd.DataFrame([{
+        'gamepk': '1',
+        'game_date': pd.Timestamp('2023-05-01'),
+    }])
+
+    result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
+
+    assert result.loc[0, 'pitcher_role'] == 'bullpen'
+
+
+def test_create_pa_outcome_includes_pitcher_team_id():
+    """pitcher_team_id is needed to compute pitcher_key_id (sp -> pitcher_id,
+    bullpen -> pitcher_team_id) for the team-pooled bullpen feature join —
+    without it, bullpen-role PAs have no way to look up their team's pooled
+    stats."""
+
+    pbp = pd.DataFrame([{
+        'gamepk': '1',
+        'batter_team_name': 'Cubs',
+        'play_id': 'p1',
+        'pitcher_id': '10',
+        'pitcher_name': 'Pitcher One',
+        'batter_id': '1',
+        'batter_name': 'Batter One',
+        'is_hit': 1,
+        'pitcher_throw_hand': 'L',
+        'batter_bat_side': 'S',
+        'pitcher_role': 'bullpen',
+        'pitcher_team_id': 'T1',
+    }])
+    batter_boxscore = pd.DataFrame([{
+        'gamepk': '1',
+        'personId': '1',
+        'batting_order': 3,
+    }])
+    game_info = pd.DataFrame([{
+        'gamepk': '1',
+        'game_season': 2023,
+        'weather_condition': 'Sunny',
+        'weather_temp': '75',
+    }])
+    schedule = pd.DataFrame([{
+        'gamepk': '1',
+        'game_date': pd.Timestamp('2023-05-01'),
+    }])
+
+    result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
+
+    assert result.loc[0, 'pitcher_team_id'] == 'T1'

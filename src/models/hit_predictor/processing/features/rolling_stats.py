@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from .season_stats import _prefix_stat_cols
+from .season_stats import _prefix_stat_cols, _pitcher_role_lookup
 
 # Stat definitions, formulas, and "why this stat" rationale: see FEATURE_GLOSSARY.md
 # and season_stats.py's header comment — same stat categories/formulas as season_stats.py,
@@ -108,6 +108,10 @@ def _rolling_prefix(entity: str, window: str | int) -> str:
 BOX_KEY_COLS = ['personId', 'gamepk', 'game_date', 'game_season']
 
 
+def _box_key_cols(entity_col: str) -> list[str]:
+    return [entity_col, 'gamepk', 'game_date', 'game_season']
+
+
 def build_batter_rolling_stats(batter_boxscore: pd.DataFrame, window: str | int) -> pd.DataFrame:
     _validate_window(window)
 
@@ -131,13 +135,14 @@ def build_batter_rolling_stats(batter_boxscore: pd.DataFrame, window: str | int)
     return _prefix_stat_cols(df, prefix=_rolling_prefix('batter', window), key_cols=BOX_KEY_COLS)
 
 
-def build_pitcher_rolling_stats(pitcher_boxscore: pd.DataFrame, window: str | int) -> pd.DataFrame:
+def build_pitcher_rolling_stats(pitcher_boxscore: pd.DataFrame, window: str | int, entity_col: str = 'personId') -> pd.DataFrame:
     _validate_window(window)
 
     stat_cols = ['h', 'r', 'er', 'bb', 'hr', 'k', 'p', 's', 'ip']
-    df = pitcher_boxscore[BOX_KEY_COLS + stat_cols]
+    key_cols = _box_key_cols(entity_col)
+    df = pitcher_boxscore[key_cols + stat_cols]
 
-    df = _rolling_sum(df, entity_col='personId', cols=stat_cols, window=window)
+    df = _rolling_sum(df, entity_col=entity_col, cols=stat_cols, window=window)
 
     df = df.assign(
         whip = lambda x: (x['bb'] + x['h']) / x['ip'].replace(0, np.nan),
@@ -147,7 +152,65 @@ def build_pitcher_rolling_stats(pitcher_boxscore: pd.DataFrame, window: str | in
         hr_rate = lambda x: x['hr'] / x['ip'].replace(0, np.nan),
     )
 
-    return _prefix_stat_cols(df, prefix=_rolling_prefix('pitcher', window), key_cols=BOX_KEY_COLS)
+    return _prefix_stat_cols(df, prefix=_rolling_prefix('pitcher', window), key_cols=key_cols)
+
+
+def build_pitcher_rolling_stats_all_roles(pitcher_boxscore: pd.DataFrame, pbp: pd.DataFrame, window: str | int) -> pd.DataFrame:
+    """Rolling equivalent of season_stats.build_pitcher_stats_all_roles: sp
+    rows rolled per individual pitcher as before, bullpen rows pooled by
+    team (a specific reliever's identity isn't knowable pre-game). Both
+    tagged and stacked under a common pitcher_key_id column.
+    """
+
+    # Only pitcher_role is needed — pitcher_boxscore already has its own
+    # team_id column, so pulling in pitcher_team_id too would just collide
+    # with it (team_id_x/team_id_y) for no benefit.
+    role_lookup = _pitcher_role_lookup(pbp)[['gamepk', 'pitcher_id', 'pitcher_role']].rename(
+        columns={'pitcher_id': 'personId'}
+    )
+    # personId/gamepk come straight from parquet and may not match pbp's
+    # str-cast id columns in dtype — cast both explicitly before merging,
+    # same defensive pattern as pipeline.py's _add_pbp_handedness.
+    tagged = pitcher_boxscore.assign(
+        personId=lambda x: x['personId'].astype(str), gamepk=lambda x: x['gamepk'].astype(str)
+    ).merge(
+        role_lookup.assign(
+            personId=lambda x: x['personId'].astype(str), gamepk=lambda x: x['gamepk'].astype(str)
+        ),
+        on=['gamepk', 'personId'],
+        how='left',
+    )
+
+    sp_box = tagged[tagged['pitcher_role'] == 'sp']
+    bullpen_box = tagged[tagged['pitcher_role'] == 'bullpen']
+
+    sp = (
+        build_pitcher_rolling_stats(sp_box, window=window, entity_col='personId')
+        .rename(columns={'personId': 'pitcher_key_id'})
+        .assign(pitcher_role='sp')
+    )
+    # pitcher_boxscore has one row per INDIVIDUAL pitcher per game — a real bullpen
+    # outing routinely uses 2+ relievers in the same game. _rolling_sum (inside
+    # build_pitcher_rolling_stats) operates via .transform(), which preserves one
+    # output row per INPUT row rather than collapsing to one per (team, game) — so
+    # multiple relievers in the same game must be summed into one team-game total
+    # BEFORE rolling, or every downstream join fans out and shift(1) corrupts across
+    # teammates sharing the same game_date instead of skipping the whole game. This
+    # mirrors what the pbp-derived per-game layer (_pitcher_pbp_per_game) already
+    # does before its own rolling step.
+    bullpen_per_game = (
+        bullpen_box
+        .groupby(['team_id', 'gamepk', 'game_date', 'game_season'])
+        [['h', 'r', 'er', 'bb', 'hr', 'k', 'p', 's', 'ip']].sum()
+        .reset_index()
+    )
+    bullpen = (
+        build_pitcher_rolling_stats(bullpen_per_game, window=window, entity_col='team_id')
+        .rename(columns={'team_id': 'pitcher_key_id'})
+        .assign(pitcher_role='bullpen')
+    )
+
+    return pd.concat([sp, bullpen], ignore_index=True)
 
 
 # --------------------------- PITCHER PBP ROLLING STATS --------------------------- #
@@ -159,8 +222,12 @@ def build_pitcher_rolling_stats(pitcher_boxscore: pd.DataFrame, window: str | in
 PBP_PITCHER_KEY_COLS = ['pitcher_id', 'gamepk', 'game_date', 'game_season']
 
 
-def _pitcher_stuff_command_per_game(pbp: pd.DataFrame) -> pd.DataFrame:
-    group_cols = PBP_PITCHER_KEY_COLS
+def _pbp_pitcher_key_cols(entity_col: str) -> list[str]:
+    return [entity_col, 'gamepk', 'game_date', 'game_season']
+
+
+def _pitcher_stuff_command_per_game(pbp: pd.DataFrame, entity_col: str = 'pitcher_id') -> pd.DataFrame:
+    group_cols = _pbp_pitcher_key_cols(entity_col)
 
     df = (
         pbp
@@ -217,8 +284,8 @@ def _pitcher_stuff_command_per_game(pbp: pd.DataFrame) -> pd.DataFrame:
     return df.merge(n_pitches, on=group_cols, how='left')
 
 
-def _pitcher_pa_outcome_per_game(pbp: pd.DataFrame) -> pd.DataFrame:
-    group_cols = PBP_PITCHER_KEY_COLS
+def _pitcher_pa_outcome_per_game(pbp: pd.DataFrame, entity_col: str = 'pitcher_id') -> pd.DataFrame:
+    group_cols = _pbp_pitcher_key_cols(entity_col)
 
     last_pitch_pbp = (
         pbp[pbp['pitch_number'] == pbp.groupby(['gamepk', 'play_id'])['pitch_number'].transform('max')]
@@ -250,15 +317,18 @@ def _pitcher_pa_outcome_per_game(pbp: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _pitcher_last_inning_per_game(pbp: pd.DataFrame) -> pd.DataFrame:
-    group_cols = PBP_PITCHER_KEY_COLS
+def _pitcher_last_inning_per_game(pbp: pd.DataFrame, entity_col: str = 'pitcher_id') -> pd.DataFrame:
+    group_cols = _pbp_pitcher_key_cols(entity_col)
 
     last_pitch_pbp = (
         pbp[pbp['pitch_number'] == pbp.groupby(['gamepk', 'play_id'])['pitch_number'].transform('max')]
         .reset_index(drop=True)
     )
+    # At entity_col='pitcher_team_id' this naturally means "the last pitch
+    # thrown by any reliever on that team that game" — the right team-level
+    # meaning, for free, from generalizing the same idxmax selection.
     last_pa_per_game = last_pitch_pbp.loc[
-        last_pitch_pbp.groupby(['pitcher_id', 'gamepk'])['play_id'].idxmax()
+        last_pitch_pbp.groupby([entity_col, 'gamepk'])['play_id'].idxmax()
     ]
 
     cols = group_cols + [
@@ -279,8 +349,8 @@ def _pitcher_last_inning_per_game(pbp: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _pitcher_contact_quality_per_game(pbp: pd.DataFrame) -> pd.DataFrame:
-    group_cols = PBP_PITCHER_KEY_COLS
+def _pitcher_contact_quality_per_game(pbp: pd.DataFrame, entity_col: str = 'pitcher_id') -> pd.DataFrame:
+    group_cols = _pbp_pitcher_key_cols(entity_col)
 
     contact_only = pbp[pbp['is_in_play'] == True]
 
@@ -306,16 +376,17 @@ PITCHER_PBP_CONTACT_COUNT_COLS = [
 ]
 
 
-def _pitcher_pbp_per_game(pbp: pd.DataFrame, pitcher_role: str | None = None) -> pd.DataFrame:
+def _pitcher_pbp_per_game(pbp: pd.DataFrame, pitcher_role: str | None = None, entity_col: str = 'pitcher_id') -> pd.DataFrame:
     if pitcher_role is not None:
         pbp = pbp[pbp['pitcher_role'] == pitcher_role]
 
     pbp = pbp.assign(is_first_pitch_strike=lambda x: x['is_first_pitch'] & x['is_strike'])
 
-    df = _pitcher_stuff_command_per_game(pbp)
-    df = df.merge(_pitcher_pa_outcome_per_game(pbp), on=PBP_PITCHER_KEY_COLS, how='left')
-    df = df.merge(_pitcher_last_inning_per_game(pbp), on=PBP_PITCHER_KEY_COLS, how='left')
-    df = df.merge(_pitcher_contact_quality_per_game(pbp), on=PBP_PITCHER_KEY_COLS, how='left')
+    key_cols = _pbp_pitcher_key_cols(entity_col)
+    df = _pitcher_stuff_command_per_game(pbp, entity_col=entity_col)
+    df = df.merge(_pitcher_pa_outcome_per_game(pbp, entity_col=entity_col), on=key_cols, how='left')
+    df = df.merge(_pitcher_last_inning_per_game(pbp, entity_col=entity_col), on=key_cols, how='left')
+    df = df.merge(_pitcher_contact_quality_per_game(pbp, entity_col=entity_col), on=key_cols, how='left')
 
     df[PITCHER_PBP_CONTACT_COUNT_COLS] = df[PITCHER_PBP_CONTACT_COUNT_COLS].astype(float).fillna(0.0)
 
@@ -329,16 +400,20 @@ def _pitcher_pbp_per_game(pbp: pd.DataFrame, pitcher_role: str | None = None) ->
 
 
 def build_pbp_pitcher_rolling_feats(
-    pbp: pd.DataFrame, window: str | int, pitcher_role: str | None = None
+    pbp: pd.DataFrame, window: str | int, pitcher_role: str | None = None, entity_col: str = 'pitcher_id'
 ) -> pd.DataFrame:
     """Rolling equivalent of season_stats.py's build_pbp_pitcher_feats. Same category
-    boundaries and formulas, computed at per-game grain and rolled forward."""
+    boundaries and formulas, computed at per-game grain and rolled forward.
+
+    entity_col: 'pitcher_id' (default) for per-pitcher rolling stats, or
+    'pitcher_team_id' to pool a team's appearances (e.g. bullpen) into one
+    rolled series instead of one per individual pitcher.
+    """
 
     _validate_window(window)
 
-    key_cols = PBP_PITCHER_KEY_COLS
-    entity_col = 'pitcher_id'
-    per_game = _pitcher_pbp_per_game(pbp, pitcher_role=pitcher_role)
+    key_cols = _pbp_pitcher_key_cols(entity_col)
+    per_game = _pitcher_pbp_per_game(pbp, pitcher_role=pitcher_role, entity_col=entity_col)
 
     sum_cols = [
         'stuff_end_speed_sum', 'stuff_end_speed_n',
@@ -470,6 +545,35 @@ def build_pbp_pitcher_rolling_feats(
     rolled = rolled[key_cols + final_cols]
 
     return _prefix_stat_cols(rolled, prefix=_rolling_prefix('pitcher', window), key_cols=key_cols)
+
+
+def build_pbp_pitcher_rolling_feats_all_roles(pbp: pd.DataFrame, window: str | int) -> pd.DataFrame:
+
+    """Rolling equivalent of season_stats.py's build_pbp_pitcher_feats_all_roles:
+    builds both role variants, tags each row with which role it represents, and
+    stacks them so the result can be joined on ['pitcher_key_id', 'gamepk',
+    'pitcher_role'] instead of ['pitcher_id', 'gamepk'] alone. Each role's rolling
+    window only ever rolls forward that role's own prior games — a swingman's SP
+    rolling stat and bullpen rolling stat never blend into each other.
+
+    The bullpen half is pooled by team (entity_col='pitcher_team_id') rather
+    than kept per individual pitcher_id — see build_pbp_pitcher_feats_all_roles
+    for the same rationale (a specific reliever's identity isn't knowable
+    pre-game). Both halves are renamed to a common pitcher_key_id column.
+    """
+
+    sp = (
+        build_pbp_pitcher_rolling_feats(pbp, window=window, pitcher_role='sp')
+        .rename(columns={'pitcher_id': 'pitcher_key_id'})
+        .assign(pitcher_role='sp')
+    )
+    bullpen = (
+        build_pbp_pitcher_rolling_feats(pbp, window=window, pitcher_role='bullpen', entity_col='pitcher_team_id')
+        .rename(columns={'pitcher_team_id': 'pitcher_key_id'})
+        .assign(pitcher_role='bullpen')
+    )
+
+    return pd.concat([sp, bullpen], ignore_index=True)
 
 
 # --------------------------- BATTER PBP ROLLING STATS --------------------------- #
