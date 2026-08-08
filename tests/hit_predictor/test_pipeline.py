@@ -1,6 +1,6 @@
 import pandas as pd
 
-from models.hit_predictor.processing.pipeline import _initial_pbp_processing
+from models.hit_predictor.processing.pipeline import _add_pbp_handedness, _initial_pbp_processing
 
 
 def _make_pbp_row(**overrides):
@@ -86,3 +86,39 @@ def test_is_swinging_strike_counts_a_missed_bunt():
     result = _initial_pbp_processing(pbp, target_col='is_hit')
 
     assert result.loc[0, 'is_swinging_strike'] == True
+
+
+def test_add_pbp_handedness_pulls_hand_from_the_correct_role():
+    """pitcher_throw_hand must come from the PITCHER's player_info row and
+    batter_bat_side from the BATTER's row — not swapped. Each fixture player
+    is given a distinct hand value per role specifically so a swap bug (using
+    pitchHand for the batter or batSide for the pitcher) would be caught."""
+
+    pbp = pd.DataFrame([{'pitcher_id': '10', 'batter_id': '1'}])
+    player_info = pd.DataFrame([
+        {'person_id': 10, 'pitchHand': 'L', 'batSide': 'R'},
+        {'person_id': 1, 'pitchHand': 'R', 'batSide': 'S'},
+    ])
+
+    result = _add_pbp_handedness(pbp, player_info)
+
+    assert result.loc[0, 'pitcher_throw_hand'] == 'L'
+    assert result.loc[0, 'batter_bat_side'] == 'S'
+
+
+def test_add_pbp_handedness_joins_despite_int_vs_str_id_dtype_mismatch():
+    """player_info.person_id comes from the MLB API as a raw int, while pbp's
+    batter_id/pitcher_id are cast to str earlier in the pipeline. A merge
+    without explicit dtype alignment silently produces an all-NaN join
+    instead of erroring, so this must be guarded explicitly."""
+
+    pbp = pd.DataFrame([{'pitcher_id': '10', 'batter_id': '1'}])
+    player_info = pd.DataFrame([
+        {'person_id': 10, 'pitchHand': 'L', 'batSide': 'R'},
+        {'person_id': 1, 'pitchHand': 'R', 'batSide': 'L'},
+    ])
+
+    result = _add_pbp_handedness(pbp, player_info)
+
+    assert result.loc[0, 'pitcher_throw_hand'] == 'L'
+    assert result.loc[0, 'batter_bat_side'] == 'L'

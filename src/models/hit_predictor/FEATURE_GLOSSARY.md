@@ -148,7 +148,7 @@ Built from event outcomes (walks, hits, etc.), re-weighted or park/league-adjust
 | **Weather (temp, wind speed/direction)** | Air density affects carry distance; wind direction relative to outfield orientation adds/subtracts HR distance; warmer air carries further | ✅ `weather_temp`, `weather_wind_speed`, `weather_wind_direction` already parsed in `process_game_info` (`pipeline.py`) |
 | **Umpire tendencies (zone size, consistency)** | Some umpires call a measurably larger/smaller or less consistent zone, shifting effective K%/BB% for that game | ❌ gap — no umpire identity ingested |
 | **Days of rest / bullpen usage (fatigue proxies)** | Recent pitch counts, back-to-back appearances, rest days are leading indicators of stuff decline or injury risk | ⚠️ `pbp` has per-game pitch counts (`_create_pitcher_pitch_count_stats` already computes these); day-of-rest itself needs a date-diff against the player's prior appearance, not yet computed |
-| **Platoon splits (vs. L/R)** | Nearly every hitter/pitcher performs meaningfully differently vs. same- vs. opposite-handed opponents — a near-universal matchup feature | ✅ `PLAYER_INFO_COLUMNS` already has `batSide` and `pitchHand` — joinable, not yet used as a split dimension in any `build_*` function |
+| **Platoon splits (vs. L/R)** | Nearly every hitter/pitcher performs meaningfully differently vs. same- vs. opposite-handed opponents — a near-universal matchup feature | ✅ implemented — see §5B |
 | **Batted-ball spray angle / pull%** | Combined with EV/LA, indicates whether a power profile is exploitable by shifting/positioning | ⚠️ have `hit_coord_x`/`hit_coord_y` — spray angle is computable from those, not yet implemented |
 
 ---
@@ -171,6 +171,22 @@ All batter season-stat categories originally scoped in this section are now buil
 **Known gaps in what's implemented** (documented inline above, not fixed): `o_swing_rate`/`z_swing_rate` use an all-pitches denominator rather than the standard zone-filtered one (see §2, Whiff/Chase/Z-Swing section); BABIP omits the `sf` adjustment (missing column); wOBA/wRC+ remain unbuilt (§3).
 
 **Everything in the ❌ gap column across §1–§4** (xBA/xwOBA, wRC+, park factors, bat tracking, WAR, OAA, catcher framing, sprint speed) remains explicitly deferred — each needs either a new model, new context data, or new raw ingestion, not just a new feature function.
+
+---
+
+## 5B. Platoon (Handedness) Splits — Implemented
+
+Every stat category from §5 also exists split by opponent handedness — the standard sabermetric platoon split: a batter's season split by the *pitcher's* throwing hand, a pitcher's season split by the *batter's* hand. Plumbing: `pipeline.py`'s `_add_pbp_handedness(df, player_info)` merges two static, per-player columns onto every pbp row — `pitcher_throw_hand` (`pitcher_id` → `player_info.pitchHand`, 'L'/'R') and `batter_bat_side` (`batter_id` → `player_info.batSide`, 'L'/'R'/'S'). `build_pbp_features` now takes `player_info` as a required argument.
+
+**Batter vs. pitcher hand** — `build_pbp_batter_feats_by_pitcher_hand(pbp)`. Same 5 categories as §5, each `_create_batter_*` helper grouped with `pitcher_throw_hand` added (via a new optional `extra_group_cols` param, default `None` — existing callers unaffected), then pivoted wide with `_pivot_by_hand` so a batter/season row has both `batter_last_season_vs_lhp_pa_hit_rate` and `batter_last_season_vs_rhp_pa_hit_rate` side by side, rather than one row per hand. `pitcher_throw_hand` is static per pitcher, so there's no switch-hitter-style ambiguity on this side.
+
+**Pitcher vs. batter hand** — `build_pbp_pitcher_feats_by_batter_hand(pbp, pitcher_role=None)`. Same call signature/role filter as `build_pbp_pitcher_feats` (stacks with `pitcher_role`: sp/bullpen × 3 hand buckets = 6 combos). **Three buckets, not two** — `vs_lhb` / `vs_rhb` / `vs_switch` — because `batter_bat_side` already distinguishes switch-hitters (API code `'S'`) from `player_info`, at zero extra ingestion cost. Switch-hitters get their own bucket rather than being forced into L or R: they aren't a data-quality compromise, they're arguably the *more correct* modeling choice, since a switch-hitter almost always bats opposite-handed to the pitcher specifically to keep the platoon advantage — so "pitcher vs. switch-hitter" is a genuinely distinct population (a pitcher essentially never gets the same-handed advantage against one), not a fuzzy blend of the L/R buckets.
+
+**League-wide context table** — `build_league_handedness_stats(pbp)`. Same 5 categories, but pooled across *every* player: one row per `(game_season, pitcher_throw_hand, batter_bat_side)` — 2×3 = 6 rows/season, no `batter_id`/`pitcher_id`. Exists because a single player's PAs against their less-frequently-faced hand can be as thin as ~75–150 PA in one season — too noisy to trust alone even though platoon splits are comparatively stable. This table is the stable, high-sample-size companion sitting alongside the noisier per-player splits above; no shrinkage/blending is done automatically — both levels are shipped as separate columns and left for the model to weigh.
+
+All three follow the same point-in-time-safe `_shift_to_last_season` pattern as everything else in §5.
+
+**Known limitation:** per-PA batter handedness isn't available for switch-hitters mid-game — `player_info.batSide` is a static per-player attribute, correct for the ~85–90% of batters who don't switch, but the raw MLB API's per-play `matchup.batSide` (which would resolve exactly which side a switch-hitter batted from in a specific PA) isn't captured by `fetch_playbyplay_data` in `src/data/modules/fetchers.py`. This doesn't affect the splits documented above (they only need the *pitcher's* hand, which is static and reliable, or the batter's *bucket* — L/R/S — not the exact side used in a specific PA) — it would only matter for a future, finer-grained feature that needed a switch-hitter's actual per-PA side. Not pursued; would require adding `batSide`/`pitchHand` to `PLAYBYPLAY_COLUMNS` plus a backfill of already-ingested raw playbyplay data.
 
 ---
 

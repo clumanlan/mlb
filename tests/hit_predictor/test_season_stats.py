@@ -10,9 +10,17 @@ from models.hit_predictor.processing.features.season_stats import (
     _create_batter_plate_discipline_stats,
     _create_batter_two_strike_foul_stats,
     _create_pitcher_contact_quality_stats,
+    _create_pitcher_last_inning_stats,
+    _create_pitcher_pa_outcome_stats,
+    _pivot_by_hand,
     _shift_to_last_season,
     build_batter_stats,
+    build_league_handedness_stats,
     build_pbp_batter_feats,
+    build_pbp_batter_feats_by_pitcher_hand,
+    build_pbp_pitcher_feats,
+    build_pbp_pitcher_feats_by_batter_hand,
+    build_pitcher_stats,
 )
 
 
@@ -35,6 +43,79 @@ def test_contact_quality_stats_returns_pitcher_id_and_game_season_as_columns():
 
     assert 'pitcher_id' in result.columns
     assert 'game_season' in result.columns
+
+
+def _make_pitcher_boxscore_row(**overrides):
+    row = {
+        'personId': '1',
+        'game_season': 2023,
+        'h': 5, 'r': 2, 'er': 2, 'bb': 1, 'hr': 1, 'k': 8, 'p': 90, 's': 60, 'ip': 6.0,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_build_pitcher_stats_preserves_person_id_as_a_column():
+    """build_pitcher_stats groups by personId but previously passed
+    key_cols=['pitcher_id', 'game_season'] to _prefix_stat_cols — since
+    'pitcher_id' doesn't exist yet at that point, personId itself (the only
+    actual join key) fell through and got prefixed away into
+    pitcher_season_personId, leaving no usable key for downstream merges."""
+
+    pitcher_boxscore = pd.DataFrame([_make_pitcher_boxscore_row()])
+
+    result = build_pitcher_stats(pitcher_boxscore)
+
+    assert 'personId' in result.columns
+    assert 'pitcher_season_personId' not in result.columns
+    assert 'pitcher_last_season_personId' not in result.columns
+
+
+def _make_last_inning_pbp_row(**overrides):
+    row = {
+        'pitcher_id': '1',
+        'gamepk': '1',
+        'game_season': 2023,
+        'play_id': 1,
+        'pitch_number': 1,
+        'inning': 9,
+        'start_speed': 90.0,
+        'is_ball': False,
+        'is_strike': True,
+        'count_balls': 0,
+        'count_strikes': 2,
+        'count_outs': 3,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_create_pitcher_last_inning_stats_uses_true_last_pitch_of_final_pa():
+    """The pitcher's final PA of the game (play_id=2) has two pitches: an
+    opening ball at 95mph, then the actual final pitch — a 90mph strikeout
+    pitch. Selecting via groupby(...)['play_id'].idxmax() alone (without
+    first collapsing each PA to its true last pitch) ties-break to whichever
+    row appears first in the frame, silently picking the *opening* pitch of
+    the last PA instead of the true last pitch — velo 95 and ball_rate 1.0
+    instead of the correct velo 90 and ball_rate 0.0."""
+
+    pbp = pd.DataFrame([
+        # earlier PA, not the last one
+        _make_last_inning_pbp_row(play_id=1, pitch_number=1, inning=8, start_speed=88.0),
+        # final PA: opening pitch (a ball) ...
+        _make_last_inning_pbp_row(play_id=2, pitch_number=1, inning=9, start_speed=95.0,
+                                   is_ball=True, is_strike=False, count_balls=0, count_strikes=0),
+        # ... then the true last pitch (a called strikeout)
+        _make_last_inning_pbp_row(play_id=2, pitch_number=2, inning=9, start_speed=90.0,
+                                   is_ball=False, is_strike=True, count_balls=0, count_strikes=2, count_outs=3),
+    ])
+
+    result = _create_pitcher_last_inning_stats(pbp)
+
+    row = result.iloc[0]
+    assert row['pitcher_season_avg_last_inning_velo'] == 90.0
+    assert row['pitcher_season_last_inning_ball_rate'] == 0.0
+    assert row['pitcher_season_last_inning_strike_rate'] == 1.0
 
 
 def _make_batter_boxscore_row(**overrides):
@@ -462,3 +543,281 @@ def test_build_pbp_batter_feats_has_no_role_parameter():
 
     sig = inspect.signature(build_pbp_batter_feats)
     assert list(sig.parameters) == ['pbp']
+
+
+# --------------------------- HANDEDNESS SPLIT: BATTER VS PITCHER HAND --------------------------- #
+
+def _make_hand_split_pa_pbp():
+    return pd.DataFrame([
+        # vs LHP: 2 PAs, both singles -> hit_rate 1.0
+        {'batter_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 1, 'pitch_number': 1,
+         'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1, 'pitcher_throw_hand': 'L'},
+        {'batter_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 2, 'pitch_number': 1,
+         'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1, 'pitcher_throw_hand': 'L'},
+        # vs RHP: 1 PA, a strikeout -> hit_rate 0.0
+        {'batter_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 3, 'pitch_number': 1,
+         'play_result': 'Strikeout', 'count_balls': 0, 'count_strikes': 2, 'pitcher_throw_hand': 'R'},
+    ])
+
+
+def test_create_batter_pa_outcome_stats_extra_group_cols_splits_rates_by_hand():
+    """extra_group_cols must produce one row per (batter_id, game_season, hand) with
+    rates computed independently per hand, not pooled across both."""
+
+    result = _create_batter_pa_outcome_stats(
+        _make_hand_split_pa_pbp(), extra_group_cols=['pitcher_throw_hand']
+    )
+
+    assert set(result.columns) >= {'batter_id', 'game_season', 'pitcher_throw_hand'}
+    assert len(result) == 2
+
+    vs_l = result[result['pitcher_throw_hand'] == 'L'].iloc[0]
+    vs_r = result[result['pitcher_throw_hand'] == 'R'].iloc[0]
+    assert vs_l['batter_season_pa_total'] == 2
+    assert vs_l['batter_season_pa_hit_rate'] == 1.0
+    assert vs_r['batter_season_pa_total'] == 1
+    assert vs_r['batter_season_pa_hit_rate'] == 0.0
+
+
+def test_create_batter_pa_outcome_stats_extra_group_cols_defaults_to_no_split():
+    """Passing no extra_group_cols must reproduce the original ungrouped-by-hand
+    behavior exactly — existing call sites must not change output."""
+
+    result = _create_batter_pa_outcome_stats(_make_hand_split_pa_pbp())
+
+    assert 'pitcher_throw_hand' not in result.columns
+    assert len(result) == 1
+    assert result.iloc[0]['batter_season_pa_total'] == 3
+
+
+def test_pivot_by_hand_inserts_hand_tag_after_entity_prefix():
+    """_pivot_by_hand turns a long (entity, season, hand) table into one wide
+    row per (entity, season), inserting each hand's tag right after the
+    entity_prefix in every stat column name."""
+
+    long_df = pd.DataFrame([
+        {'batter_id': '1', 'game_season': 2023, 'pitcher_throw_hand': 'L', 'batter_season_pa_hit_rate': 0.5},
+        {'batter_id': '1', 'game_season': 2023, 'pitcher_throw_hand': 'R', 'batter_season_pa_hit_rate': 0.2},
+    ])
+
+    result = _pivot_by_hand(
+        long_df,
+        hand_col='pitcher_throw_hand',
+        hand_tags={'L': 'vs_lhp', 'R': 'vs_rhp'},
+        key_cols=['batter_id', 'game_season'],
+        entity_prefix='batter_season_',
+    )
+
+    row = result.iloc[0]
+    assert row['batter_season_vs_lhp_pa_hit_rate'] == 0.5
+    assert row['batter_season_vs_rhp_pa_hit_rate'] == 0.2
+    assert 'pitcher_throw_hand' not in result.columns
+
+
+def test_pivot_by_hand_drops_rows_with_unmapped_hand_codes():
+    """A hand code missing from hand_tags (e.g. NaN from an unmatched
+    player_info join) must be dropped, not silently produce a garbage
+    'batter_season_Nonepa_hit_rate'-style column."""
+
+    long_df = pd.DataFrame([
+        {'batter_id': '1', 'game_season': 2023, 'pitcher_throw_hand': 'L', 'batter_season_pa_hit_rate': 0.5},
+        {'batter_id': '1', 'game_season': 2023, 'pitcher_throw_hand': None, 'batter_season_pa_hit_rate': 0.9},
+    ])
+
+    result = _pivot_by_hand(
+        long_df,
+        hand_col='pitcher_throw_hand',
+        hand_tags={'L': 'vs_lhp', 'R': 'vs_rhp'},
+        key_cols=['batter_id', 'game_season'],
+        entity_prefix='batter_season_',
+    )
+
+    assert not any('0.9' in str(v) for v in result.iloc[0].values)
+    assert result.iloc[0]['batter_season_vs_lhp_pa_hit_rate'] == 0.5
+
+
+def test_build_pbp_batter_feats_by_pitcher_hand_splits_rates_correctly():
+    """Reuses _make_full_batter_pbp's 2 PAs (PA1: single, PA2: strikeout) but
+    tags PA1 as vs-LHP and PA2 as vs-RHP, so the split must show a 1.0 hit
+    rate vs LHP and 0.0 vs RHP — proving the split isn't just pooling both."""
+
+    pbp = _make_full_batter_pbp()
+    pbp.loc[pbp['play_id'] == 1, 'pitcher_throw_hand'] = 'L'
+    pbp.loc[pbp['play_id'] == 2, 'pitcher_throw_hand'] = 'R'
+
+    result = build_pbp_batter_feats_by_pitcher_hand(pbp)
+
+    row = result.iloc[0]
+    assert row['game_season'] == 2024
+    assert row['batter_last_season_vs_lhp_pa_hit_rate'] == 1.0
+    assert row['batter_last_season_vs_rhp_pa_hit_rate'] == 0.0
+
+
+def test_build_pbp_batter_feats_by_pitcher_hand_merges_all_substats():
+    """Same 5-category merge as build_pbp_batter_feats, but each category now
+    split into vs_lhp/vs_rhp column pairs."""
+
+    pbp = _make_full_batter_pbp().assign(pitcher_throw_hand='L')
+    other_hand = _make_full_batter_pbp().assign(
+        pitcher_throw_hand='R',
+        gamepk='2',
+        play_id=lambda x: x['play_id'] + 10,
+    )
+    result = build_pbp_batter_feats_by_pitcher_hand(pd.concat([pbp, other_hand], ignore_index=True))
+
+    row = result.iloc[0]
+    for tag in ('vs_lhp', 'vs_rhp'):
+        assert f'batter_last_season_{tag}_pa_hit_rate' in result.columns
+        assert f'batter_last_season_{tag}_o_swing_rate' in result.columns
+        assert f'batter_last_season_{tag}_contact_hard_hit_rate' in result.columns
+        assert f'batter_last_season_{tag}_foul_rate' in result.columns
+        assert f'batter_last_season_{tag}_two_strike_foul_rate' in result.columns
+
+
+# --------------------------- HANDEDNESS SPLIT: PITCHER VS BATTER HAND --------------------------- #
+
+def _make_hand_split_pitcher_pa_pbp():
+    return pd.DataFrame([
+        # vs LHB: 1 PA, a strikeout -> hit_rate 0.0
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 1, 'pitch_number': 1,
+         'play_result': 'Strikeout', 'count_balls': 0, 'count_strikes': 2, 'batter_bat_side': 'L'},
+        # vs RHB: 1 PA, a single -> hit_rate 1.0
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 2, 'pitch_number': 1,
+         'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1, 'batter_bat_side': 'R'},
+    ])
+
+
+def test_create_pitcher_pa_outcome_stats_extra_group_cols_splits_rates_by_batter_hand():
+    result = _create_pitcher_pa_outcome_stats(
+        _make_hand_split_pitcher_pa_pbp(), extra_group_cols=['batter_bat_side']
+    )
+
+    assert len(result) == 2
+    vs_l = result[result['batter_bat_side'] == 'L'].iloc[0]
+    vs_r = result[result['batter_bat_side'] == 'R'].iloc[0]
+    assert vs_l['pitcher_season_pa_hit_rate'] == 0.0
+    assert vs_r['pitcher_season_pa_hit_rate'] == 1.0
+
+
+def test_create_pitcher_pa_outcome_stats_extra_group_cols_defaults_to_no_split():
+    result = _create_pitcher_pa_outcome_stats(_make_hand_split_pitcher_pa_pbp())
+
+    assert 'batter_bat_side' not in result.columns
+    assert len(result) == 1
+
+
+def _make_full_pitcher_pbp():
+    return pd.DataFrame([
+        # SP, PA vs LHB: strikeout, not in play
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 1, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'batter_bat_side': 'L',
+         'is_first_pitch': True, 'is_strike': True, 'is_ball': False, 'is_called_strike': True,
+         'is_chase': False, 'is_zone_swing': False, 'is_swinging_strike': False, 'is_in_play': False,
+         'start_speed': 95.0, 'end_speed': 87.0, 'perceived_velo': 97.0, 'spin_rate': 2200.0,
+         'movement_magnitude': 8.0, 'pfx_z': 10.0, 'extension': 6.5, 'speed_retention': 0.9,
+         'plate_x': 0.1, 'plate_z_normalized': 0.5, 'zone': 5,
+         'play_result': 'Strikeout', 'count_balls': 0, 'count_strikes': 2,
+         'inning': 1, 'count_outs': 1, 'is_pitch': True,
+         'hardness': None, 'trajectory': None, 'launch_speed': np.nan, 'launch_angle': np.nan},
+        # SP, PA vs RHB: single, in play hard-hit line drive
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 2, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'batter_bat_side': 'R',
+         'is_first_pitch': True, 'is_strike': False, 'is_ball': False, 'is_called_strike': False,
+         'is_chase': False, 'is_zone_swing': True, 'is_swinging_strike': False, 'is_in_play': True,
+         'start_speed': 93.0, 'end_speed': 85.0, 'perceived_velo': 95.0, 'spin_rate': 2100.0,
+         'movement_magnitude': 7.0, 'pfx_z': 9.0, 'extension': 6.2, 'speed_retention': 0.91,
+         'plate_x': -0.2, 'plate_z_normalized': 0.4, 'zone': 4,
+         'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1,
+         'inning': 1, 'count_outs': 1, 'is_pitch': True,
+         'hardness': 'Hard', 'trajectory': 'Line Drive', 'launch_speed': 100.0, 'launch_angle': 15.0},
+        # Bullpen appearance, different game, vs LHB — must be excluded when pitcher_role='sp'
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '2', 'play_id': 1, 'pitch_number': 1,
+         'pitcher_role': 'bullpen', 'batter_bat_side': 'L',
+         'is_first_pitch': True, 'is_strike': False, 'is_ball': True, 'is_called_strike': False,
+         'is_chase': False, 'is_zone_swing': False, 'is_swinging_strike': False, 'is_in_play': False,
+         'start_speed': 91.0, 'end_speed': 83.0, 'perceived_velo': 93.0, 'spin_rate': 2000.0,
+         'movement_magnitude': 6.0, 'pfx_z': 8.0, 'extension': 6.0, 'speed_retention': 0.9,
+         'plate_x': 1.0, 'plate_z_normalized': 1.5, 'zone': 12,
+         'play_result': 'Walk', 'count_balls': 4, 'count_strikes': 1,
+         'inning': 9, 'count_outs': 1, 'is_pitch': True,
+         'hardness': None, 'trajectory': None, 'launch_speed': np.nan, 'launch_angle': np.nan},
+    ])
+
+
+def test_build_pbp_pitcher_feats_by_batter_hand_splits_rates_correctly():
+    result = build_pbp_pitcher_feats_by_batter_hand(_make_full_pitcher_pbp(), pitcher_role='sp')
+
+    row = result.iloc[0]
+    assert row['game_season'] == 2024
+    assert row['pitcher_last_season_vs_lhb_pa_hit_rate'] == 0.0
+    assert row['pitcher_last_season_vs_rhb_pa_hit_rate'] == 1.0
+
+
+def test_build_pbp_pitcher_feats_by_batter_hand_respects_pitcher_role_filter():
+    """pitcher_role='sp' must exclude the bullpen row entirely — its
+    batter_bat_side='L' PA must not leak into vs_lhb stats."""
+
+    result = build_pbp_pitcher_feats_by_batter_hand(_make_full_pitcher_pbp(), pitcher_role='sp')
+
+    row = result.iloc[0]
+    # only 1 vs-LHB PA counted (the SP one), not 2 (which would include the bullpen PA)
+    assert row['pitcher_last_season_vs_lhb_pa_total'] == 1
+
+
+def test_build_pbp_pitcher_feats_by_batter_hand_merges_all_substats():
+    result = build_pbp_pitcher_feats_by_batter_hand(_make_full_pitcher_pbp())
+
+    for tag in ('vs_lhb', 'vs_rhb'):
+        assert f'pitcher_last_season_{tag}_pa_hit_rate' in result.columns
+        assert f'pitcher_last_season_{tag}_stuff_start_speed_mean' in result.columns
+        assert f'pitcher_last_season_{tag}_game_avg_pitch_count' in result.columns
+        assert f'pitcher_last_season_{tag}_contact_hard_hit_rate' in result.columns
+
+
+# --------------------------- LEAGUE-WIDE HANDEDNESS CONTEXT TABLE --------------------------- #
+
+def _make_league_handedness_pbp():
+    # batter '1' vs LHP: PA1 single (hit), PA2 strikeout (not hit) -> 0.5 hit rate alone
+    batter_1 = _make_full_batter_pbp().assign(pitcher_throw_hand='L', batter_bat_side='R')
+
+    # batter '2', same hand pair (L vs R), both PAs are hits -> 1.0 hit rate alone.
+    # Pooled with batter 1: 3 hits / 4 PAs = 0.75 — proves league table aggregates
+    # across ALL batters sharing a hand pair, not per-batter.
+    batter_2 = _make_full_batter_pbp().assign(
+        pitcher_throw_hand='L', batter_bat_side='R',
+        batter_id='2', gamepk='2', play_id=lambda x: x['play_id'] + 10,
+        play_result=lambda x: x['play_result'].replace({'Strikeout': 'Single'}),
+    )
+
+    return pd.concat([batter_1, batter_2], ignore_index=True)
+
+
+def test_build_league_handedness_stats_pools_across_all_batters_sharing_a_hand_pair():
+    result = build_league_handedness_stats(_make_league_handedness_pbp())
+
+    assert set(result.columns) >= {'game_season', 'pitcher_throw_hand', 'batter_bat_side'}
+    row = result[(result['pitcher_throw_hand'] == 'L') & (result['batter_bat_side'] == 'R')].iloc[0]
+    assert row['game_season'] == 2024
+    assert row['league_last_season_pa_hit_rate'] == 0.75
+    assert row['league_last_season_pa_total'] == 4
+
+
+def test_build_league_handedness_stats_has_no_per_player_id_columns():
+    """This table is a population-level aggregate — batter_id/pitcher_id must
+    not appear, otherwise it isn't actually the coarse, stable 'high-level'
+    context table it's meant to be alongside the noisier per-player splits."""
+
+    result = build_league_handedness_stats(_make_league_handedness_pbp())
+
+    assert 'batter_id' not in result.columns
+    assert 'pitcher_id' not in result.columns
+
+
+def test_build_league_handedness_stats_merges_all_substats():
+    result = build_league_handedness_stats(_make_league_handedness_pbp())
+
+    assert 'league_last_season_pa_hit_rate' in result.columns
+    assert 'league_last_season_o_swing_rate' in result.columns
+    assert 'league_last_season_contact_hard_hit_rate' in result.columns
+    assert 'league_last_season_foul_rate' in result.columns
+    assert 'league_last_season_two_strike_foul_rate' in result.columns

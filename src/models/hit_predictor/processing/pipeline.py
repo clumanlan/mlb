@@ -169,13 +169,36 @@ def _add_pbp_game_date(df, schedule):
 
     return df 
 
-def build_pbp_features(pbp: pd.DataFrame, schedule, target_col: str = "is_hit") -> pd.DataFrame:
+def _add_pbp_handedness(df, player_info):
+
+    """Adds pitcher_throw_hand and batter_bat_side. Static per-player attributes
+    (not time-varying), sourced from the player_info reference table — no
+    point-in-time shift concern here, unlike rolling/season stat features."""
+
+    player_info = player_info.assign(person_id=lambda x: x['person_id'].astype(str))
+
+    pitcher_hand = (
+        player_info[['person_id', 'pitchHand']]
+        .rename(columns={'person_id': 'pitcher_id', 'pitchHand': 'pitcher_throw_hand'})
+    )
+    batter_hand = (
+        player_info[['person_id', 'batSide']]
+        .rename(columns={'person_id': 'batter_id', 'batSide': 'batter_bat_side'})
+    )
+
+    df = df.merge(pitcher_hand, on='pitcher_id', how='left')
+    df = df.merge(batter_hand, on='batter_id', how='left')
+
+    return df
+
+def build_pbp_features(pbp: pd.DataFrame, schedule, player_info, target_col: str = "is_hit") -> pd.DataFrame:
 
     pbp = _initial_pbp_processing(pbp, target_col)
-    pbp = _add_pbp_pitch_state(pbp)   
+    pbp = _add_pbp_pitch_state(pbp)
     pbp = _add_pbp_starting_pitcher(pbp)
     pbp = _add_pbp_pa(pbp)
     pbp = _add_pbp_game_date(pbp, schedule)
+    pbp = _add_pbp_handedness(pbp, player_info)
 
     return pbp
 
