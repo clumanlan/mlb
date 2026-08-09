@@ -2,6 +2,8 @@ import pandas as pd
 
 from models.hit_predictor.processing.pipeline import (
     _add_pbp_handedness,
+    _add_pbp_starting_pitcher,
+    _add_pbp_times_through_order,
     _initial_pbp_processing,
     create_pa_outcome,
 )
@@ -128,6 +130,252 @@ def test_add_pbp_handedness_joins_despite_int_vs_str_id_dtype_mismatch():
     assert result.loc[0, 'batter_bat_side'] == 'L'
 
 
+def test_add_pbp_starting_pitcher_tags_first_pitcher_as_sp_and_others_as_bullpen():
+    """The pitcher who threw the first pitch for a team in the game (by
+    play_id order) is the starter; anyone else who pitches for that team
+    later in the same game is bullpen. This function had no direct unit
+    test before this session despite gating every pitcher-side feature in
+    the model."""
+
+    df = pd.DataFrame([
+        {'gamepk': '1', 'play_id': 'p1', 'pitcher_team_id': 'T1', 'pitcher_id': '10'},
+        {'gamepk': '1', 'play_id': 'p2', 'pitcher_team_id': 'T1', 'pitcher_id': '20'},
+    ])
+
+    result = _add_pbp_starting_pitcher(df)
+
+    assert result.loc[result['play_id'] == 'p1', 'pitcher_role'].iloc[0] == 'sp'
+    assert result.loc[result['play_id'] == 'p2', 'pitcher_role'].iloc[0] == 'bullpen'
+
+
+def test_add_pbp_starting_pitcher_carries_starting_pitcher_id_onto_bullpen_rows():
+    """starting_pitcher_id must be attached to EVERY PA for that team's game
+    — including bullpen-role ones — since the expected-pitcher-role
+    machinery needs to look up 'who was this game's starter' regardless of
+    who actually threw a specific PA. The old indicator-merge collapsed this
+    down to just pitcher_role and discarded the identity itself."""
+
+    df = pd.DataFrame([
+        {'gamepk': '1', 'play_id': 'p1', 'pitcher_team_id': 'T1', 'pitcher_id': '10'},
+        {'gamepk': '1', 'play_id': 'p2', 'pitcher_team_id': 'T1', 'pitcher_id': '20'},
+    ])
+
+    result = _add_pbp_starting_pitcher(df)
+
+    assert result.loc[result['play_id'] == 'p1', 'starting_pitcher_id'].iloc[0] == '10'
+    assert result.loc[result['play_id'] == 'p2', 'starting_pitcher_id'].iloc[0] == '10'
+
+
+def test_add_times_through_order_caps_at_three_for_starter_pas():
+    """A batter's Nth PA against the starting pitcher is the standard
+    'times through the order' signal (Lichtman TTOP research) — batters gain
+    a real advantage each additional time facing the same starter. The raw
+    count keeps climbing (4th, 5th PA) but the researched penalty plateaus by
+    the 3rd time through, so it's capped at 3 rather than left uncapped."""
+
+    df = pd.DataFrame({
+        'pitcher_role': ['sp', 'sp', 'sp', 'sp'],
+        'batter_pa_number': [1, 2, 3, 4],
+    })
+
+    result = _add_pbp_times_through_order(df)
+
+    assert result['times_through_order'].tolist() == [1, 2, 3, 3]
+
+
+def test_add_times_through_order_is_null_for_bullpen_pas():
+    """TTOP is specifically about facing the SAME starter repeatedly — a
+    batter's Nth PA against a reliever isn't the same phenomenon (relievers
+    are usually seen once per game), so bullpen-role PAs get NaN rather than
+    a misleading 'times through the order' number."""
+
+    df = pd.DataFrame({
+        'pitcher_role': ['bullpen'],
+        'batter_pa_number': [4],
+    })
+
+    result = _add_pbp_times_through_order(df)
+
+    assert result['times_through_order'].isna().all()
+
+
+def test_create_pa_outcome_includes_venue_id():
+    """venue_id lives on schedule (not pbp) but was never selected into
+    pa_outcome — without it, a park-factor feature (venue's hit-rate index)
+    has no key to join on."""
+
+    pbp = pd.DataFrame([{
+        'gamepk': '1',
+        'batter_team_name': 'Cubs',
+        'play_id': 'p1',
+        'pitcher_id': '10',
+        'pitcher_name': 'Pitcher One',
+        'batter_id': '1',
+        'batter_name': 'Batter One',
+        'is_hit': 1,
+        'pitcher_throw_hand': 'L',
+        'batter_bat_side': 'S',
+        'pitcher_role': 'sp',
+        'pitcher_team_id': 'T1',
+        'starting_pitcher_id': '10',
+        'batter_pa_number': 1,
+    }])
+    batter_boxscore = pd.DataFrame([{
+        'gamepk': '1',
+        'personId': '1',
+        'batting_order': 3,
+    }])
+    game_info = pd.DataFrame([{
+        'gamepk': '1',
+        'game_season': 2023,
+        'weather_condition': 'Sunny',
+        'weather_temp': '75',
+    }])
+    schedule = pd.DataFrame([{
+        'gamepk': '1',
+        'game_date': pd.Timestamp('2023-05-01'),
+        'venue_id': 'V1',
+    }])
+
+    result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
+
+    assert result.loc[0, 'venue_id'] == 'V1'
+
+
+def test_create_pa_outcome_includes_starting_pitcher_id():
+    """starting_pitcher_id is computed onto pbp by _add_pbp_starting_pitcher
+    (needed even for bullpen-role PAs, to look up that game's starter's
+    historical depth stat) but must survive create_pa_outcome's column
+    selection to reach the model-assembly stage."""
+
+    pbp = pd.DataFrame([{
+        'gamepk': '1',
+        'batter_team_name': 'Cubs',
+        'play_id': 'p1',
+        'pitcher_id': '20',
+        'pitcher_name': 'Reliever One',
+        'batter_id': '1',
+        'batter_name': 'Batter One',
+        'is_hit': 1,
+        'pitcher_throw_hand': 'L',
+        'batter_bat_side': 'S',
+        'pitcher_role': 'bullpen',
+        'pitcher_team_id': 'T1',
+        'starting_pitcher_id': '10',
+        'batter_pa_number': 4,
+    }])
+    batter_boxscore = pd.DataFrame([{
+        'gamepk': '1',
+        'personId': '1',
+        'batting_order': 3,
+    }])
+    game_info = pd.DataFrame([{
+        'gamepk': '1',
+        'game_season': 2023,
+        'weather_condition': 'Sunny',
+        'weather_temp': '75',
+    }])
+    schedule = pd.DataFrame([{
+        'gamepk': '1',
+        'game_date': pd.Timestamp('2023-05-01'),
+        'venue_id': 'V1',
+    }])
+
+    result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
+
+    assert result.loc[0, 'starting_pitcher_id'] == '10'
+
+
+def test_create_pa_outcome_includes_estimated_team_pa_position():
+    """estimated_team_pa_position approximates how many team plate
+    appearances have happened by the time this batter's PA occurs, using
+    only pre-game-knowable inputs (batting order slot) plus the batter's own
+    PA count so far: (batter_pa_number - 1) * 9 + batting_order. Hand-computed:
+    batter_pa_number=2, batting_order=4 -> (2-1)*9 + 4 = 13."""
+
+    pbp = pd.DataFrame([{
+        'gamepk': '1',
+        'batter_team_name': 'Cubs',
+        'play_id': 'p1',
+        'pitcher_id': '10',
+        'pitcher_name': 'Pitcher One',
+        'batter_id': '1',
+        'batter_name': 'Batter One',
+        'is_hit': 1,
+        'pitcher_throw_hand': 'L',
+        'batter_bat_side': 'S',
+        'pitcher_role': 'sp',
+        'pitcher_team_id': 'T1',
+        'starting_pitcher_id': '10',
+        'batter_pa_number': 2,
+    }])
+    batter_boxscore = pd.DataFrame([{
+        'gamepk': '1',
+        'personId': '1',
+        'batting_order': 4,
+    }])
+    game_info = pd.DataFrame([{
+        'gamepk': '1',
+        'game_season': 2023,
+        'weather_condition': 'Sunny',
+        'weather_temp': '75',
+    }])
+    schedule = pd.DataFrame([{
+        'gamepk': '1',
+        'game_date': pd.Timestamp('2023-05-01'),
+        'venue_id': 'V1',
+    }])
+
+    result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
+
+    assert result.loc[0, 'estimated_team_pa_position'] == 13
+
+
+def test_create_pa_outcome_does_not_expose_realized_times_through_order():
+    """The realized, per-PA times_through_order (computed from who ACTUALLY
+    pitched) leaks in-game information a pre-game model wouldn't have — it's
+    retained internally on pbp for phase 2's historical split-stat table, but
+    must not reach pa_outcome/model_df as a raw feature."""
+
+    pbp = pd.DataFrame([{
+        'gamepk': '1',
+        'batter_team_name': 'Cubs',
+        'play_id': 'p1',
+        'pitcher_id': '10',
+        'pitcher_name': 'Pitcher One',
+        'batter_id': '1',
+        'batter_name': 'Batter One',
+        'is_hit': 1,
+        'pitcher_throw_hand': 'L',
+        'batter_bat_side': 'S',
+        'pitcher_role': 'sp',
+        'pitcher_team_id': 'T1',
+        'starting_pitcher_id': '10',
+        'batter_pa_number': 2,
+        'times_through_order': 2,
+    }])
+    batter_boxscore = pd.DataFrame([{
+        'gamepk': '1',
+        'personId': '1',
+        'batting_order': 3,
+    }])
+    game_info = pd.DataFrame([{
+        'gamepk': '1',
+        'game_season': 2023,
+        'weather_condition': 'Sunny',
+        'weather_temp': '75',
+    }])
+    schedule = pd.DataFrame([{
+        'gamepk': '1',
+        'game_date': pd.Timestamp('2023-05-01'),
+        'venue_id': 'V1',
+    }])
+
+    result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
+
+    assert 'times_through_order' not in result.columns
+
+
 def test_create_pa_outcome_includes_batter_and_pitcher_hand():
     """pitcher_throw_hand and batter_bat_side are computed onto pbp by
     _add_pbp_handedness before create_pa_outcome runs, but create_pa_outcome's
@@ -149,6 +397,8 @@ def test_create_pa_outcome_includes_batter_and_pitcher_hand():
         'batter_bat_side': 'S',
         'pitcher_role': 'sp',
         'pitcher_team_id': 'T1',
+        'starting_pitcher_id': '10',
+        'batter_pa_number': 1,
     }])
     batter_boxscore = pd.DataFrame([{
         'gamepk': '1',
@@ -164,6 +414,7 @@ def test_create_pa_outcome_includes_batter_and_pitcher_hand():
     schedule = pd.DataFrame([{
         'gamepk': '1',
         'game_date': pd.Timestamp('2023-05-01'),
+        'venue_id': 'V1',
     }])
 
     result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
@@ -193,6 +444,8 @@ def test_create_pa_outcome_includes_pitcher_role():
         'batter_bat_side': 'S',
         'pitcher_role': 'bullpen',
         'pitcher_team_id': 'T1',
+        'starting_pitcher_id': '99',
+        'batter_pa_number': 1,
     }])
     batter_boxscore = pd.DataFrame([{
         'gamepk': '1',
@@ -208,6 +461,7 @@ def test_create_pa_outcome_includes_pitcher_role():
     schedule = pd.DataFrame([{
         'gamepk': '1',
         'game_date': pd.Timestamp('2023-05-01'),
+        'venue_id': 'V1',
     }])
 
     result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
@@ -234,6 +488,8 @@ def test_create_pa_outcome_includes_pitcher_team_id():
         'batter_bat_side': 'S',
         'pitcher_role': 'bullpen',
         'pitcher_team_id': 'T1',
+        'starting_pitcher_id': '99',
+        'batter_pa_number': 1,
     }])
     batter_boxscore = pd.DataFrame([{
         'gamepk': '1',
@@ -249,6 +505,7 @@ def test_create_pa_outcome_includes_pitcher_team_id():
     schedule = pd.DataFrame([{
         'gamepk': '1',
         'game_date': pd.Timestamp('2023-05-01'),
+        'venue_id': 'V1',
     }])
 
     result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)

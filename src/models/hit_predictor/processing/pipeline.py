@@ -106,8 +106,12 @@ def _add_pbp_pitch_state(df):
 
 def _add_pbp_starting_pitcher(df):
 
-    """Adds pitcher_role. Starter = first pitcher to throw for a team in the game
-    (by play_id order) — doesn't handle openers."""
+    """Adds starting_pitcher_id and pitcher_role. Starter = first pitcher to
+    throw for a team in the game (by play_id order) — doesn't handle
+    openers. starting_pitcher_id is carried onto EVERY PA for that team's
+    game, including bullpen-role ones — needed so the expected-pitcher-role
+    machinery can look up "who was this game's starter" regardless of who
+    actually threw a specific PA."""
 
     starting_pitcher_ids = (
         df
@@ -116,19 +120,15 @@ def _add_pbp_starting_pitcher(df):
         .first()
         .reset_index()
         [['gamepk', 'pitcher_team_id', 'pitcher_id']]
+        .rename(columns={'pitcher_id': 'starting_pitcher_id'})
     )
 
     df = (
         df
-        .merge(
-            starting_pitcher_ids, 
-            on=['gamepk', 'pitcher_team_id', 'pitcher_id'],
-            how='left',
-            indicator=True)
+        .merge(starting_pitcher_ids, on=['gamepk', 'pitcher_team_id'], how='left')
         .assign(
-            pitcher_role = lambda x: np.where(x['_merge']=='both', 'sp', 'bullpen')
+            pitcher_role = lambda x: np.where(x['pitcher_id'] == x['starting_pitcher_id'], 'sp', 'bullpen')
         )
-        .drop(['_merge'], axis=1)
     )
 
     return df
@@ -153,6 +153,24 @@ def _add_pbp_pa(df):
     )
 
     return df 
+
+def _add_pbp_times_through_order(df):
+
+    """Adds times_through_order: the batter's Nth PA against the STARTING
+    pitcher this game, capped at 3 — the Lichtman times-through-the-order
+    research shows a real batter advantage each additional time facing the
+    same starter, plateauing by the 3rd time through. NaN for bullpen-role
+    PAs, since a batter's Nth PA against a reliever isn't the same
+    phenomenon. Must run after _add_pbp_starting_pitcher and _add_pbp_pa
+    (needs pitcher_role and batter_pa_number)."""
+
+    return df.assign(
+        times_through_order=lambda x: np.where(
+            x['pitcher_role'] == 'sp',
+            x['batter_pa_number'].clip(upper=3),
+            np.nan,
+        )
+    )
 
 def _add_pbp_game_date(df, schedule):
     df = (
@@ -197,6 +215,7 @@ def build_pbp_features(pbp: pd.DataFrame, schedule, player_info, target_col: str
     pbp = _add_pbp_pitch_state(pbp)
     pbp = _add_pbp_starting_pitcher(pbp)
     pbp = _add_pbp_pa(pbp)
+    pbp = _add_pbp_times_through_order(pbp)
     pbp = _add_pbp_game_date(pbp, schedule)
     pbp = _add_pbp_handedness(pbp, player_info)
 
@@ -227,13 +246,29 @@ def _create_batting_order(batter_boxscore):
 
     return df.assign(batting_order = lambda x: x['batting_order'].astype(int))
 
+def _add_estimated_team_pa_position(df):
+
+    """Adds estimated_team_pa_position: a rough estimate of how many team
+    plate appearances have happened by the time this batter's PA occurs,
+    from pre-game-knowable inputs only — the batter's own PA count so far
+    this game and his batting order slot: (batter_pa_number - 1) * 9 +
+    batting_order. Assumes a standard 9-batter lineup cycle; a high-scoring
+    inning produces more than 9 team PAs before returning to the leadoff
+    spot, so this systematically undercounts in high-scoring games — an
+    accepted approximation, not a bug. Must run after the batting_order
+    merge (pbp itself has no batting_order column)."""
+
+    return df.assign(
+        estimated_team_pa_position=lambda x: (x['batter_pa_number'] - 1) * 9 + x['batting_order']
+    )
+
 def create_pa_outcome(pbp, batter_boxscore, game_info, schedule):
 
     batting_order = _create_batting_order(batter_boxscore)
     game_info = game_info[["gamepk", "game_season", "weather_condition", "weather_temp"]].drop_duplicates("gamepk")
-    schedule = schedule[["gamepk", "game_date"]].drop_duplicates("gamepk")
-    
-    pa_outcome = pbp[['gamepk', 'batter_team_name', 'play_id', 'pitcher_id', 'pitcher_name', 'batter_id', 'batter_name', 'is_hit', 'pitcher_throw_hand', 'batter_bat_side', 'pitcher_role', 'pitcher_team_id']].drop_duplicates().reset_index(drop=True)
+    schedule = schedule[["gamepk", "game_date", "venue_id"]].drop_duplicates("gamepk")
+
+    pa_outcome = pbp[['gamepk', 'batter_team_name', 'play_id', 'pitcher_id', 'pitcher_name', 'batter_id', 'batter_name', 'is_hit', 'pitcher_throw_hand', 'batter_bat_side', 'pitcher_role', 'pitcher_team_id', 'starting_pitcher_id', 'batter_pa_number']].drop_duplicates().reset_index(drop=True)
 
     pa_outcome = pa_outcome.merge(
         schedule,
@@ -246,5 +281,6 @@ def create_pa_outcome(pbp, batter_boxscore, game_info, schedule):
     )
 
     pa_outcome = pa_outcome.merge(batting_order, on=["gamepk", "batter_id"], how="inner")
+    pa_outcome = _add_estimated_team_pa_position(pa_outcome)
 
     return pa_outcome

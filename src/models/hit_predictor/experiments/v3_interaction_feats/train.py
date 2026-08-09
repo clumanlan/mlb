@@ -1,13 +1,16 @@
 
+import time
 import yaml
 from pathlib import Path
 
 import awswrangler as wr
 import boto3
+import matplotlib.pyplot as plt
 import pandas as pd
 
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.inspection import PartialDependenceDisplay
 
 from models.hit_predictor.utils.eval import evaluate_hit_predictor, plot_calibration_curve
 from models.hit_predictor.utils.model_prep import (
@@ -28,6 +31,11 @@ from models.hit_predictor.processing.features import season_stats
 from models.hit_predictor.processing.features import rolling_stats
 from models.hit_predictor.processing.features import park_factors
 from models.hit_predictor.processing.features import expected_role
+from models.hit_predictor.processing.features import interaction_feats
+from models.hit_predictor.processing.features.interaction_feats import (
+    find_rolling_trend_pairs,
+    find_sample_size_col,
+)
 
 
 STAGE = Path(__file__).parent
@@ -265,6 +273,26 @@ model_df.loc[model_df['expected_pitcher_role'] == 'bullpen', 'pitcher_throw_hand
 
 
 # ---------------------------------------------------------------------------- #
+#                         ENGINEERED INTERACTION FEATURES                      #
+# ---------------------------------------------------------------------------- #
+# An earlier run of this script trained a Random Forest on model_df's raw columns
+# only, then PDP-checked (see git history / mlflow run_type=pdp_diagnostics) whether
+# it was already learning (a) a hot/cold "recent form vs. season baseline" signal
+# and (b) a "trust a rate less when its sample size is small" signal from the raw
+# rolling columns alone. Neither showed up as a real interaction — both PDP surfaces
+# looked close to additive — so both get built as explicit columns here instead.
+trend_pairs = find_rolling_trend_pairs(list(model_df.columns))
+model_df = interaction_feats.build_trend_features(model_df, trend_pairs)
+
+rate_to_sample_col = {}
+for short_col, _ in trend_pairs:
+    sample_col = find_sample_size_col(list(model_df.columns), short_col)
+    if sample_col:
+        rate_to_sample_col[short_col] = sample_col
+model_df = interaction_feats.build_shrinkage_weight_features(model_df, rate_to_sample_col)
+
+
+# ---------------------------------------------------------------------------- #
 #                                  TRAIN MODEL                                 #
 # ---------------------------------------------------------------------------- #
 
@@ -335,14 +363,19 @@ models = {
     # generalization check without spending any extra held-out data.
     "Random Forest": RandomForestClassifier(
         n_estimators=100, min_samples_leaf=5, max_features="sqrt",
-        n_jobs=-1, oob_score=True, random_state=42,
+        # n_jobs=-1 (one worker process per CPU core) OOM-killed this run on a
+        # memory-constrained machine — each loky worker holds its own overhead
+        # while fitting trees in parallel over the ~675k-row training set, on
+        # top of everything else already resident. Capped to 2 to trade fit
+        # speed for reliably finishing; bump back up once memory isn't tight.
+        n_jobs=2, oob_score=True, random_state=42,
     ),
 }
 
 N_BINS = 10
 MIN_N = 500
 
-PLOT_DIR = BASE_DIR / "plots" / "v2_rolling_features"
+PLOT_DIR = BASE_DIR / "plots" / "v3_interaction_feats"
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 BASELINE_RESULTS_MD = BASE_DIR / "baseline_results.md"
@@ -406,3 +439,102 @@ for name, model in fitted_models.items():
         },
         artifact_paths=artifact_paths,
     )
+
+
+# ---------------------------------------------------------------------------- #
+#                         PDP INTERACTION DIAGNOSTICS                          #
+# ---------------------------------------------------------------------------- #
+# Before hand-engineering an interaction feature, check whether the Random Forest
+# fit above (raw features only, no engineered interactions) already learns it via
+# 2-way partial dependence:
+#   - "trend" pairs: a stat's short-window value vs. its season-long value (e.g.
+#     batter_roll_last10g_ba x batter_roll_season_ba) — does the model already
+#     combine these non-additively, the way an explicit trend_diff = short - season
+#     feature would encode directly?
+#   - "shrinkage" pairs: a short-window rate vs. its own sample-size denominator
+#     (e.g. batter_roll_last10g_ba x batter_roll_last10g_plate_appearances, the
+#     latter newly surviving into the feature set as of this experiment — see
+#     rolling_stats.py) — does the model already learn to discount a noisy
+#     small-sample short-window rate?
+# A flat/axis-aligned 2-way PDP surface for a pair is evidence the model ISN'T
+# capturing that interaction on its own and it's worth engineering explicitly in
+# processing/features/interaction_feats.py; a visibly twisted/diagonal surface
+# means it's already there and an explicit feature would likely be redundant.
+# This step only produces diagnostic plots — no new features are added to the
+# model in this run. Restricted to pairs touching the Random Forest's top-N most
+# important raw features, since those are the only ones worth the (slow) cost of
+# 2-way PDP computation.
+
+rf_model = fitted_models["Random Forest"]
+importances = pd.Series(rf_model.feature_importances_, index=FEATURE_NAMES)
+TOP_N_IMPORTANT = 20
+top_features = set(importances.sort_values(ascending=False).head(TOP_N_IMPORTANT).index)
+
+trend_pairs = [
+    (short_col, season_col)
+    for short_col, season_col in find_rolling_trend_pairs(FEATURE_NAMES)
+    if short_col in top_features or season_col in top_features
+]
+
+PDP_DIR = PLOT_DIR / "pdp"
+PDP_DIR.mkdir(parents=True, exist_ok=True)
+
+# RandomForestClassifier only supports sklearn's brute-force PDP method (no
+# 'recursion' shortcut like GradientBoosting gets), which re-predicts over
+# every row of whatever X is passed in for every grid point — on the full
+# multi-million-row X_train that's hours per pair. A few thousand rows is
+# plenty to estimate the average partial-dependence surface; grid_resolution
+# is similarly capped well below sklearn's default of 100 per axis.
+PDP_SAMPLE_SIZE = 3000
+PDP_GRID_RESOLUTION = 20
+pdp_background = X_train.sample(n=min(PDP_SAMPLE_SIZE, len(X_train)), random_state=42)
+print(f"\nPDP background sample: {len(pdp_background)} rows (of {len(X_train)} total train rows), "
+      f"grid_resolution={PDP_GRID_RESOLUTION}")
+print(f"Trend pairs to check: {len(trend_pairs)}")
+
+pdp_artifact_paths = []
+for i, (short_col, season_col) in enumerate(trend_pairs, start=1):
+    t0 = time.time()
+    fig, ax = plt.subplots(figsize=(6, 5))
+    PartialDependenceDisplay.from_estimator(
+        rf_model, pdp_background, [(short_col, season_col)], ax=ax,
+        grid_resolution=PDP_GRID_RESOLUTION,
+    )
+    trend_plot_path = PDP_DIR / f"trend_{short_col}_x_{season_col}.png"
+    fig.savefig(trend_plot_path, bbox_inches="tight")
+    plt.close(fig)
+    pdp_artifact_paths.append(str(trend_plot_path))
+    print(f"  [{i}/{len(trend_pairs)}] trend {short_col} x {season_col} -> {trend_plot_path.name} "
+          f"({time.time() - t0:.1f}s)", flush=True)
+
+    sample_col = find_sample_size_col(FEATURE_NAMES, short_col)
+    if sample_col:
+        t0 = time.time()
+        fig, ax = plt.subplots(figsize=(6, 5))
+        PartialDependenceDisplay.from_estimator(
+            rf_model, pdp_background, [(short_col, sample_col)], ax=ax,
+            grid_resolution=PDP_GRID_RESOLUTION,
+        )
+        shrinkage_plot_path = PDP_DIR / f"shrinkage_{short_col}_x_{sample_col}.png"
+        fig.savefig(shrinkage_plot_path, bbox_inches="tight")
+        plt.close(fig)
+        pdp_artifact_paths.append(str(shrinkage_plot_path))
+        print(f"  [{i}/{len(trend_pairs)}] shrinkage {short_col} x {sample_col} -> {shrinkage_plot_path.name} "
+              f"({time.time() - t0:.1f}s)", flush=True)
+
+print(f"\nSaved {len(pdp_artifact_paths)} PDP diagnostic plots to {PDP_DIR}")
+print("Next step: inspect these plots. For any pair whose 2-way PDP surface is")
+print("flat/axis-aligned (no visible interaction), that trend or shrinkage signal")
+print("likely isn't being learned implicitly by the tree — add it as an explicit")
+print("engineered feature in processing/features/interaction_feats.py and re-train.")
+print("Skip pairs where the surface already shows the effect (redundant to add).")
+
+if pdp_artifact_paths:
+    with mlflow.start_run():
+        mlflow.set_tags({
+            "stage": str(STAGE),
+            "run_type": "pdp_diagnostics",
+            "git_sha": get_git_sha(),
+        })
+        for path in pdp_artifact_paths:
+            mlflow.log_artifact(path, artifact_path="pdp")

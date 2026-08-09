@@ -540,6 +540,11 @@ def build_pbp_pitcher_rolling_feats(
         'pitch_count_avg', 'pitch_count_std', 'pitch_count_max',
         'contact_hard_hit_rate', 'contact_gb_rate', 'contact_fb_rate', 'contact_ld_rate',
         'contact_avg_launch_speed', 'contact_avg_launch_angle',
+        # Sample-size denominators behind the rates above — kept as their own
+        # features (not just consumed internally) so a model can learn to
+        # trust a rate less when it's built from a thin window, an implicit
+        # substitute for hand-designed shrinkage. See FEATURE_GLOSSARY.md.
+        'n_pitches', 'pa_total', 'contact_n', 'games_n',
     ]
 
     rolled = rolled[key_cols + final_cols]
@@ -811,6 +816,12 @@ def build_pbp_batter_rolling_feats(pbp: pd.DataFrame, window: str | int) -> pd.D
         'contact_ld_rate', 'contact_avg_launch_speed', 'contact_avg_launch_angle',
         'foul_rate', 'contact_foul_rate',
         'two_strike_foul_rate',
+        # Sample-size denominators behind the rates above — kept as their own
+        # features (not just consumed internally) so a model can learn to
+        # trust a rate less when it's built from a thin window, an implicit
+        # substitute for hand-designed shrinkage. See FEATURE_GLOSSARY.md.
+        'n_pitches', 'pa_total', 'swing_n', 'contact_trajectory_n',
+        'foul_swing_n', 'foul_or_inplay_n', 'two_strike_swing_n',
     ]
 
     rolled = rolled[key_cols + final_cols]

@@ -166,6 +166,73 @@ def build_pitcher_stats_all_roles(pitcher_boxscore: pd.DataFrame, pbp: pd.DataFr
     return pd.concat([sp, bullpen], ignore_index=True)
 
 
+# --------------------------- PITCHER START DEPTH (expected-role phase 1) --------------------------- #
+# "How many batters does this starter typically face per start" — the historical, pre-game-knowable
+# stat that lets expected_role.py estimate whether a given batter's PA will still be against the
+# starter, replacing the realized (leaky) pitcher_role as the pitcher-side merge/gating key. Built
+# only from a pitcher's own realized 'sp' appearances — his true track record should reflect his
+# actual starts, not a guess; only the join/gating layer downstream uses an estimate.
+
+def _create_pitcher_start_depth_stats(pbp, entity_col: str = 'pitcher_id'):
+
+    sp_pbp = pbp[pbp['pitcher_role'] == 'sp']
+
+    batters_faced_per_start = (
+        sp_pbp[[entity_col, 'gamepk', 'game_season', 'play_id']]
+        .drop_duplicates(subset=[entity_col, 'gamepk', 'play_id'])
+        .groupby([entity_col, 'gamepk', 'game_season'])
+        .size()
+        .rename('batters_faced')
+        .reset_index()
+    )
+
+    df = (
+        batters_faced_per_start
+        .groupby([entity_col, 'game_season'])
+        .agg(
+            avg_batters_faced_per_start=('batters_faced', 'mean'),
+            std_batters_faced_per_start=('batters_faced', 'std'),
+            n_starts=('batters_faced', 'count'),
+        )
+        .reset_index()
+    )
+
+    return _prefix_stat_cols(df, prefix='pitcher_season_start_', key_cols=[entity_col, 'game_season'])
+
+
+def build_pitcher_start_depth_stats(pbp):
+
+    return _shift_to_last_season(_create_pitcher_start_depth_stats(pbp))
+
+
+def build_league_avg_start_depth(pitcher_start_depth_stats):
+    """League-wide average starter depth per season, weighted by each pitcher's own
+    start count — the fallback for a pitcher with no prior-season track record of his
+    own (rookie call-up, or too few starts last season to be trustworthy alone). Built
+    directly from the already-shifted per-pitcher table (build_pitcher_start_depth_stats'
+    output) rather than re-deriving from raw pbp, so its game_season is already the
+    'join onto this season' grain and needs no second shift call."""
+
+    weighted = pitcher_start_depth_stats.assign(
+        _weighted_sum=lambda x: (
+            x['pitcher_last_season_start_avg_batters_faced_per_start']
+            * x['pitcher_last_season_start_n_starts']
+        )
+    )
+
+    df = (
+        weighted
+        .groupby('game_season')
+        .agg(
+            _weighted_sum=('_weighted_sum', 'sum'),
+            _total_starts=('pitcher_last_season_start_n_starts', 'sum'),
+        )
+        .reset_index()
+    )
+    df['league_last_season_avg_batters_faced_per_start'] = df['_weighted_sum'] / df['_total_starts']
+
+    return df[['game_season', 'league_last_season_avg_batters_faced_per_start']]
+
 
 # --------------------------- PITCHER PBP SEASON STATS --------------------------- #
 # See FEATURE_GLOSSARY.md for stat definitions/rationale. Categories below:
@@ -453,6 +520,111 @@ def build_pbp_pitcher_feats_by_batter_hand(pbp: pd.DataFrame, pitcher_role: str 
         hand_tags=PITCHER_BATTER_HAND_TAGS,
         key_cols=key_cols,
         entity_prefix='pitcher_season_',
+    )
+
+    return _shift_to_last_season(df)
+
+
+# --------------------------- HANDEDNESS SPLIT: TIMES THROUGH THE ORDER (phase 2) --------------------------- #
+# A starter's PA-outcome stats split by 1st/2nd/3rd+ time through the order (Lichtman TTOP
+# research). Reuses the realized times_through_order column already on pbp (kept internally
+# for exactly this — see pipeline.py's _add_pbp_times_through_order) purely as an aggregation
+# grouping key: a pitcher's own historical split should reflect his true past PAs, not the
+# pre-game estimate built in expected_role.py. Attached to model_df unconditionally for every
+# PA that pitcher throws as 'sp' (same pattern as the handedness splits above) rather than
+# picked per-PA — the model combines this with expected_times_through_order itself to learn
+# which bucket is relevant to a given PA. PA-outcome only (not the full 5-category handedness-
+# split scope) — matches the TTOP research metric (wOBA/hit-rate against by TTO bucket) most
+# directly. TTOP is specifically a starter phenomenon, so unlike build_pbp_pitcher_feats_all_roles
+# there's no bullpen half to stack.
+
+TIMES_THROUGH_ORDER_TAGS = {1: 'tto1', 2: 'tto2', 3: 'tto3plus'}
+
+
+def build_pbp_pitcher_feats_by_times_through_order(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Build starter PA-outcome stats split by times_through_order (1/2/3+).
+
+    Tagged with pitcher_key_id/pitcher_role='sp' (rather than left on bare
+    pitcher_id) so this merges onto model_df via the same (game_season,
+    expected_pitcher_key_id, expected_pitcher_role) 3-key pattern as every
+    other pitcher table in train.py — swingman-safe: a PA against this same
+    person while he's relieving elsewhere in the same season simply won't
+    match any row here, since no bullpen rows exist to match against.
+    """
+
+    sp_pbp = pbp[pbp['pitcher_role'] == 'sp']
+    key_cols = ['pitcher_id', 'game_season']
+
+    df = _create_pitcher_pa_outcome_stats(sp_pbp, extra_group_cols=['times_through_order'])
+
+    df = _pivot_by_hand(
+        df,
+        hand_col='times_through_order',
+        hand_tags=TIMES_THROUGH_ORDER_TAGS,
+        key_cols=key_cols,
+        entity_prefix='pitcher_season_',
+    )
+
+    df = _shift_to_last_season(df)
+
+    return df.rename(columns={'pitcher_id': 'pitcher_key_id'}).assign(pitcher_role='sp')
+
+
+# --------------------------- LEAGUE-WIDE TIMES THROUGH THE ORDER CONTEXT TABLE (phase 2) ------- #
+# Same rationale as the league-wide handedness table: a single pitcher's PAs in the tto3plus
+# bucket in one season can be a thin sample, so this pooled, high-sample-size companion sits
+# alongside the noisier per-pitcher splits above — no automatic shrinkage/blending, both levels
+# shipped as separate columns and left for the model to weigh. Can't reuse
+# _create_pitcher_pa_outcome_stats (it hardcodes an entity id into its groupby), so the same
+# category is recomputed here at population grain, mirroring build_league_handedness_stats.
+
+def build_league_times_through_order_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    sp_pbp = pbp[pbp['pitcher_role'] == 'sp']
+    key_cols = ['game_season', 'times_through_order']
+
+    last_pitch_pbp = (
+        sp_pbp[sp_pbp['pitch_number'] == sp_pbp.groupby(['gamepk', 'play_id'])['pitch_number'].transform('max')]
+        .reset_index(drop=True)
+    )
+
+    df = (
+        last_pitch_pbp
+        .groupby(key_cols)
+        .agg(
+            pitch_count_mean=('pitch_number', 'mean'),
+            pitch_count_std=('pitch_number', 'std'),
+            total=('play_result', 'count'),
+            strikeout_rate=('play_result', lambda x: x.isin({"Strikeout", "Strikeout Double Play"}).mean()),
+            walk_rate=('play_result', lambda x: x.isin({"Walk", "Intent Walk"}).mean()),
+            hbp_rate=('play_result', lambda x: x.eq("Hit By Pitch").mean()),
+            hit_rate=('play_result', lambda x: x.isin({"Single", "Double", "Triple", "Home Run"}).mean()),
+            hr_rate=('play_result', lambda x: x.eq("Home Run").mean()),
+            single_rate=('play_result', lambda x: x.eq("Single").mean()),
+            xbh_rate=('play_result', lambda x: x.isin({"Double", "Triple", "Home Run"}).mean()),
+            fip_k=('play_result', lambda x: x.isin({"Strikeout", "Strikeout Double Play"}).sum()),
+            fip_bb=('play_result', lambda x: x.isin({"Walk", "Hit By Pitch"}).sum()),
+            fip_hr=('play_result', lambda x: x.eq("Home Run").sum()),
+            avg_final_balls=('count_balls', 'mean'),
+            avg_final_strikes=('count_strikes', 'mean'),
+            full_count_rate=('count_balls', lambda x: (
+                (x == 3) & (last_pitch_pbp.loc[x.index, 'count_strikes'] == 2)
+            ).mean()),
+        )
+        .reset_index()
+    )
+
+    C = 3.10
+    df['fip'] = (13 * df['fip_hr'] + 3 * df['fip_bb'] - 2 * df['fip_k']) / df['total'] + C
+
+    df = _prefix_stat_cols(df, prefix='league_season_pa_', key_cols=key_cols)
+
+    df = _pivot_by_hand(
+        df,
+        hand_col='times_through_order',
+        hand_tags=TIMES_THROUGH_ORDER_TAGS,
+        key_cols=['game_season'],
+        entity_prefix='league_season_',
     )
 
     return _shift_to_last_season(df)

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 import inspect
 
@@ -12,16 +13,21 @@ from models.hit_predictor.processing.features.season_stats import (
     _create_pitcher_contact_quality_stats,
     _create_pitcher_last_inning_stats,
     _create_pitcher_pa_outcome_stats,
+    _create_pitcher_start_depth_stats,
     _pivot_by_hand,
     _shift_to_last_season,
     build_batter_stats,
+    build_league_avg_start_depth,
     build_league_handedness_stats,
+    build_league_times_through_order_stats,
     build_pbp_batter_feats,
     build_pbp_batter_feats_by_pitcher_hand,
     _pitcher_role_lookup,
     build_pbp_pitcher_feats,
     build_pbp_pitcher_feats_all_roles,
     build_pbp_pitcher_feats_by_batter_hand,
+    build_pbp_pitcher_feats_by_times_through_order,
+    build_pitcher_start_depth_stats,
     build_pitcher_stats,
     build_pitcher_stats_all_roles,
 )
@@ -927,6 +933,139 @@ def test_build_pbp_pitcher_feats_by_batter_hand_merges_all_substats():
         assert f'pitcher_last_season_{tag}_contact_hard_hit_rate' in result.columns
 
 
+# --------------------------- HANDEDNESS SPLIT: TIMES THROUGH THE ORDER (phase 2) --------------------------- #
+# A starter's PA-outcome stats split by 1st/2nd/3rd+ time through the order (Lichtman TTOP research).
+# Reuses the realized times_through_order column already on pbp (kept internally for exactly this —
+# see pipeline.py's _add_pbp_times_through_order) purely as an aggregation grouping key: a pitcher's
+# own historical split should reflect his true past PAs, not the pre-game estimate. PA-outcome only
+# (not the full 5-category handedness-split scope) — matches the TTOP research metric most directly.
+
+def _make_tto_split_pitcher_pbp():
+    return pd.DataFrame([
+        # 1st time through: 1 PA, a strikeout -> hit_rate 0.0
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 1, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'times_through_order': 1.0,
+         'play_result': 'Strikeout', 'count_balls': 0, 'count_strikes': 2},
+        # 2nd time through: 1 PA, a single -> hit_rate 1.0
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 2, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'times_through_order': 2.0,
+         'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1},
+        # 3rd+ time through: 2 PAs (single, strikeout) -> hit_rate 0.5
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 3, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'times_through_order': 3.0,
+         'play_result': 'Single', 'count_balls': 2, 'count_strikes': 0},
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 4, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'times_through_order': 3.0,
+         'play_result': 'Strikeout', 'count_balls': 0, 'count_strikes': 2},
+        # Bullpen appearance, different game — a "trap": times_through_order is set to 1.0
+        # (matching the tto1 bucket) specifically so this test fails if pitcher_role=='sp'
+        # filtering isn't actually happening, rather than passing by accident because a
+        # realized bullpen PA's times_through_order is normally NaN.
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '2', 'play_id': 1, 'pitch_number': 1,
+         'pitcher_role': 'bullpen', 'times_through_order': 1.0,
+         'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1},
+    ])
+
+
+def test_build_pbp_pitcher_feats_by_times_through_order_splits_hit_rate_by_bucket():
+    result = build_pbp_pitcher_feats_by_times_through_order(_make_tto_split_pitcher_pbp())
+
+    row = result.iloc[0]
+    assert row['game_season'] == 2024
+    assert row['pitcher_last_season_tto1_pa_hit_rate'] == 0.0
+    assert row['pitcher_last_season_tto2_pa_hit_rate'] == 1.0
+    assert row['pitcher_last_season_tto3plus_pa_hit_rate'] == 0.5
+
+
+def test_build_pbp_pitcher_feats_by_times_through_order_preserves_per_bucket_occurrence_count():
+    """The per-bucket PA count ('how many times has this actually happened')
+    must survive alongside the rate columns — a rate backed by 2 PAs is far
+    less trustworthy than one backed by 200, and the model/a human reviewing
+    this table needs to be able to tell the difference."""
+
+    result = build_pbp_pitcher_feats_by_times_through_order(_make_tto_split_pitcher_pbp())
+
+    row = result.iloc[0]
+    assert row['pitcher_last_season_tto1_pa_total'] == 1
+    assert row['pitcher_last_season_tto2_pa_total'] == 1
+    assert row['pitcher_last_season_tto3plus_pa_total'] == 2
+
+
+def test_build_pbp_pitcher_feats_by_times_through_order_excludes_bullpen_pas():
+    """TTOP is specifically a starter phenomenon — the bullpen PA (deliberately
+    given a trap times_through_order=1.0 matching the tto1 bucket) must not
+    inflate tto1's count or shift its hit rate."""
+
+    result = build_pbp_pitcher_feats_by_times_through_order(_make_tto_split_pitcher_pbp())
+
+    row = result.iloc[0]
+    assert row['pitcher_last_season_tto1_pa_total'] == 1
+    assert row['pitcher_last_season_tto1_pa_hit_rate'] == 0.0
+
+
+def test_build_pbp_pitcher_feats_by_times_through_order_tags_key_id_and_role_as_sp():
+    """Tagged with pitcher_key_id/pitcher_role='sp' (not left on bare pitcher_id)
+    so this merges onto model_df via the same (game_season, expected_pitcher_key_id,
+    expected_pitcher_role) 3-key pattern as every other pitcher table — a PA against
+    this same person while he's relieving elsewhere in the same season simply won't
+    match any row here, since no bullpen rows exist to match against."""
+
+    result = build_pbp_pitcher_feats_by_times_through_order(_make_tto_split_pitcher_pbp())
+
+    assert 'pitcher_id' not in result.columns
+    assert result.iloc[0]['pitcher_key_id'] == '1'
+    assert result.iloc[0]['pitcher_role'] == 'sp'
+
+
+# --------------------------- LEAGUE-WIDE TIMES THROUGH THE ORDER CONTEXT TABLE (phase 2) --------------------------- #
+# Same rationale as the league-wide handedness table: a single pitcher's PAs in the tto3plus
+# bucket in one season can be a thin sample, so this pooled, high-sample-size companion sits
+# alongside the noisier per-pitcher splits above — no automatic shrinkage/blending, both levels
+# shipped as separate columns and left for the model to weigh.
+
+def _make_league_tto_pbp():
+    return pd.DataFrame([
+        # pitcher '1', tto1: 1 hit, 1 out -> alone hit_rate 0.5
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 1, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'times_through_order': 1.0,
+         'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1},
+        {'pitcher_id': '1', 'game_season': 2023, 'gamepk': '1', 'play_id': 2, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'times_through_order': 1.0,
+         'play_result': 'Strikeout', 'count_balls': 0, 'count_strikes': 2},
+        # pitcher '2', tto1: 2 hits -> alone hit_rate 1.0. Pooled with pitcher '1':
+        # 3 hits / 4 PAs = 0.75 — proves the league table aggregates across ALL
+        # pitchers sharing a bucket, not per-pitcher.
+        {'pitcher_id': '2', 'game_season': 2023, 'gamepk': '2', 'play_id': 1, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'times_through_order': 1.0,
+         'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1},
+        {'pitcher_id': '2', 'game_season': 2023, 'gamepk': '2', 'play_id': 2, 'pitch_number': 1,
+         'pitcher_role': 'sp', 'times_through_order': 1.0,
+         'play_result': 'Single', 'count_balls': 2, 'count_strikes': 0},
+        # Bullpen appearance, trap times_through_order=1.0 — must be excluded from the pool.
+        {'pitcher_id': '3', 'game_season': 2023, 'gamepk': '3', 'play_id': 1, 'pitch_number': 1,
+         'pitcher_role': 'bullpen', 'times_through_order': 1.0,
+         'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1},
+    ])
+
+
+def test_build_league_times_through_order_stats_pools_across_all_pitchers_in_a_bucket():
+    result = build_league_times_through_order_stats(_make_league_tto_pbp())
+
+    row = result.iloc[0]
+    assert row['game_season'] == 2024
+    assert row['league_last_season_tto1_pa_hit_rate'] == 0.75
+    assert row['league_last_season_tto1_pa_total'] == 4
+
+
+def test_build_league_times_through_order_stats_has_no_per_pitcher_id_columns():
+    """Population-level aggregate — pitcher_id must not appear, otherwise it
+    isn't actually the coarse, stable context table it's meant to be."""
+
+    result = build_league_times_through_order_stats(_make_league_tto_pbp())
+
+    assert 'pitcher_id' not in result.columns
+
+
 # --------------------------- LEAGUE-WIDE HANDEDNESS CONTEXT TABLE --------------------------- #
 
 def _make_league_handedness_pbp():
@@ -974,3 +1113,89 @@ def test_build_league_handedness_stats_merges_all_substats():
     assert 'league_last_season_contact_hard_hit_rate' in result.columns
     assert 'league_last_season_foul_rate' in result.columns
     assert 'league_last_season_two_strike_foul_rate' in result.columns
+
+
+# --------------------------- PITCHER START DEPTH (expected-role phase 1) --------------------------- #
+# "How many batters does this starter typically face per start" — the historical stat that lets a
+# pre-game estimate of "will the starter still be in by this batter's PA" replace the realized,
+# leaky pitcher_role. Built only from a pitcher's own realized 'sp' appearances — the aggregation
+# layer keeps using realized role, since a pitcher's true track record should reflect his actual
+# starts, not a guess; only the join/gating layer downstream (expected_role.py) uses the estimate.
+
+def _make_start_depth_pbp():
+    rows = []
+    # Start 1: 4 distinct PAs (play_id p1-p4)
+    for play_id in ['p1', 'p2', 'p3', 'p4']:
+        rows.append({'pitcher_id': '10', 'gamepk': 'g1', 'game_season': 2023, 'play_id': play_id, 'pitcher_role': 'sp'})
+    # Start 2: 6 distinct PAs (play_id p1-p6)
+    for play_id in ['p1', 'p2', 'p3', 'p4', 'p5', 'p6']:
+        rows.append({'pitcher_id': '10', 'gamepk': 'g2', 'game_season': 2023, 'play_id': play_id, 'pitcher_role': 'sp'})
+    # A bullpen appearance elsewhere — must be excluded from "start depth"
+    for play_id in ['p1', 'p2']:
+        rows.append({'pitcher_id': '10', 'gamepk': 'g3', 'game_season': 2023, 'play_id': play_id, 'pitcher_role': 'bullpen'})
+    return pd.DataFrame(rows)
+
+
+def test_create_pitcher_start_depth_stats_averages_batters_faced_across_starts_only():
+    """Hand-computed: two 'sp' starts with 4 and 6 distinct PAs -> avg = (4+6)/2 = 5.0,
+    n_starts = 2. The bullpen appearance (2 PAs) must not pull the average down or
+    inflate n_starts — a reliever outing isn't a 'start'."""
+
+    result = _create_pitcher_start_depth_stats(_make_start_depth_pbp())
+    row = result[(result['pitcher_id'] == '10') & (result['game_season'] == 2023)].iloc[0]
+
+    assert row['pitcher_season_start_avg_batters_faced_per_start'] == 5.0
+    assert row['pitcher_season_start_n_starts'] == 2
+
+
+def test_create_pitcher_start_depth_stats_counts_distinct_plate_appearances_not_pitches():
+    """A single PA is usually several pitch rows sharing the same play_id —
+    'batters faced' must count distinct PAs, not raw pbp rows, or every stat
+    would be inflated by average pitches-per-PA (~4x)."""
+
+    pbp = pd.DataFrame([
+        {'pitcher_id': '10', 'gamepk': 'g1', 'game_season': 2023, 'play_id': 'p1', 'pitcher_role': 'sp'},
+        {'pitcher_id': '10', 'gamepk': 'g1', 'game_season': 2023, 'play_id': 'p1', 'pitcher_role': 'sp'},
+        {'pitcher_id': '10', 'gamepk': 'g1', 'game_season': 2023, 'play_id': 'p1', 'pitcher_role': 'sp'},
+    ])
+
+    result = _create_pitcher_start_depth_stats(pbp)
+    row = result.iloc[0]
+
+    assert row['pitcher_season_start_avg_batters_faced_per_start'] == 1.0
+    assert row['pitcher_season_start_n_starts'] == 1
+
+
+def test_build_pitcher_start_depth_stats_shifts_game_season_by_one():
+    """Same point-in-time-safe convention as every other season stat in this
+    repo: 2023 data can only be joined onto 2024 games, and the column name
+    switches from 'season_' to 'last_season_'."""
+
+    result = build_pitcher_start_depth_stats(_make_start_depth_pbp())
+    row = result[result['pitcher_id'] == '10'].iloc[0]
+
+    assert row['game_season'] == 2024
+    assert 'pitcher_last_season_start_avg_batters_faced_per_start' in result.columns
+    assert 'pitcher_season_start_avg_batters_faced_per_start' not in result.columns
+    assert row['pitcher_last_season_start_avg_batters_faced_per_start'] == 5.0
+
+
+def test_build_league_avg_start_depth_weights_by_each_pitchers_start_count():
+    """A workhorse with many starts should dominate the league average far
+    more than a pitcher with only 2 starts — a plain (unweighted) mean of
+    the two pitchers' averages would give (20+26)/2 = 23.0; the correct
+    start-count-weighted average is (20*10 + 26*2) / 12 = 21.0."""
+
+    pitcher_start_depth_stats = pd.DataFrame([
+        {'pitcher_id': 'A', 'game_season': 2024,
+         'pitcher_last_season_start_avg_batters_faced_per_start': 20.0,
+         'pitcher_last_season_start_n_starts': 10},
+        {'pitcher_id': 'B', 'game_season': 2024,
+         'pitcher_last_season_start_avg_batters_faced_per_start': 26.0,
+         'pitcher_last_season_start_n_starts': 2},
+    ])
+
+    result = build_league_avg_start_depth(pitcher_start_depth_stats)
+    row = result[result['game_season'] == 2024].iloc[0]
+
+    assert row['league_last_season_avg_batters_faced_per_start'] == pytest.approx(21.0)

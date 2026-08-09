@@ -718,6 +718,58 @@ def test_build_pbp_pitcher_rolling_feats_pa_pitch_count_mean_uses_rolled_totals(
     assert row3['pitcher_roll_last10g_pa_pitch_count_mean'].iloc[0] == pytest.approx(3.0)
 
 
+def test_build_pbp_pitcher_rolling_feats_exposes_pitch_and_pa_count_denominators():
+    """n_pitches/pa_total are the sample-size denominators behind every
+    command/stuff and PA-outcome rate in this table — they must survive as
+    their own output columns (not just get consumed internally to compute a
+    rate) so a model can learn to trust a rate less when its denominator is
+    small, instead of that signal being silently thrown away. Same dataset
+    as test_build_pbp_pitcher_rolling_feats_pa_pitch_count_mean_uses_rolled_totals,
+    which already establishes n_pitches=9, pa_total=3 rolled into g3."""
+
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1, play_result='Ball', is_ball=True, is_strike=False),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2, play_result='Ball', is_ball=True, is_strike=False),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=3, play_result='Single'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=1, play_result='Single'),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1, play_result='Ball', is_ball=True, is_strike=False),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=2, play_result='Ball', is_ball=True, is_strike=False),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=3, play_result='Ball', is_ball=True, is_strike=False),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=4, play_result='Ball', is_ball=True, is_strike=False),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=5, play_result='Single'),
+        _pitch_row(gamepk='g3', game_date='2023-04-03', play_id=1, pitch_number=1, play_result='Single'),
+    ])
+
+    result = build_pbp_pitcher_rolling_feats(df, window=10)
+
+    row3 = result.loc[result['gamepk'] == 'g3']
+    assert row3['pitcher_roll_last10g_n_pitches'].iloc[0] == 9
+    assert row3['pitcher_roll_last10g_pa_total'].iloc[0] == 3
+
+
+def test_build_pbp_pitcher_rolling_feats_exposes_contact_and_games_count_denominators():
+    """contact_n/games_n are the sample-size denominators behind the
+    contact-quality rates and last-inning averages respectively — same
+    dataset as test_build_pbp_pitcher_rolling_feats_contact_quality_rolls_rates_over_balls_in_play,
+    which already establishes contact_hard_hit_rate=0.5 (i.e. contact_n=2)
+    and games_n=2 (two prior games) rolled into g3."""
+
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                    is_in_play=True, hardness='Hard', trajectory='Line Drive'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2,
+                    is_in_play=True, hardness='Medium', trajectory='Fly Ball'),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1, is_in_play=False),
+        _pitch_row(gamepk='g3', game_date='2023-04-03', play_id=1, pitch_number=1),
+    ])
+
+    result = build_pbp_pitcher_rolling_feats(df, window=10)
+
+    row3 = result.loc[result['gamepk'] == 'g3']
+    assert row3['pitcher_roll_last10g_contact_n'].iloc[0] == 2
+    assert row3['pitcher_roll_last10g_games_n'].iloc[0] == 2
+
+
 def test_build_pbp_pitcher_rolling_feats_column_names_no_collision_with_season_stats():
     df = pd.DataFrame([_pitch_row()])
 
@@ -873,6 +925,123 @@ def test_build_pbp_batter_rolling_feats_two_strike_foul_rate():
 
     row2 = result.loc[result['gamepk'] == 'g2']
     assert row2['batter_roll_last10g_two_strike_foul_rate'].iloc[0] == pytest.approx(0.5)
+
+
+def test_build_pbp_batter_rolling_feats_exposes_pitch_and_pa_count_denominators():
+    """n_pitches/pa_total are the sample-size denominators behind the
+    plate-discipline and PA-outcome rates — same dataset as
+    test_build_pbp_batter_rolling_feats_pa_outcome_and_pitch_count_from_rolled_totals,
+    which already establishes n_pitches=4, pa_total=3 rolled into g3."""
+
+    df = pd.DataFrame([
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                           play_result='Ball'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2,
+                           play_result='Strikeout', count_strikes=2),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=1,
+                           play_result='Single'),
+        _batter_pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1,
+                           play_result='Walk'),
+        _batter_pitch_row(gamepk='g3', game_date='2023-04-03', play_id=1, pitch_number=1,
+                           play_result='Single'),
+    ])
+
+    result = build_pbp_batter_rolling_feats(df, window=10)
+
+    row3 = result.loc[result['gamepk'] == 'g3']
+    assert row3['batter_roll_last10g_n_pitches'].iloc[0] == 4
+    assert row3['batter_roll_last10g_pa_total'].iloc[0] == 3
+
+
+def test_build_pbp_batter_rolling_feats_exposes_swing_count_denominator():
+    """swing_n is the denominator behind contact_rate — same dataset as
+    test_build_pbp_batter_rolling_feats_contact_rate_denominator_is_swings_not_all_pitches,
+    which already establishes contact_rate=1.0 (2 contacts / 2 swings)
+    rolled into g3."""
+
+    df = pd.DataFrame([
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                           is_swing=False),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2,
+                           is_swing=True, is_swinging_strike=False),
+        _batter_pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1,
+                           is_swing=True, is_swinging_strike=False),
+        _batter_pitch_row(gamepk='g3', game_date='2023-04-03', play_id=1, pitch_number=1),
+    ])
+
+    result = build_pbp_batter_rolling_feats(df, window=10)
+
+    row3 = result.loc[result['gamepk'] == 'g3']
+    assert row3['batter_roll_last10g_swing_n'].iloc[0] == 2
+
+
+def test_build_pbp_batter_rolling_feats_exposes_contact_trajectory_count_denominator():
+    """contact_trajectory_n is the denominator behind the contact-quality
+    rates (gb/fb/ld rate) — same dataset as
+    test_build_pbp_batter_rolling_feats_hard_hit_rate_excludes_nulls_from_denominator,
+    which has 2 in-play pitches in g1 and 1 in g2, all with a trajectory
+    value, rolled into g3."""
+
+    df = pd.DataFrame([
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                           is_in_play=True, launch_speed=100.0, trajectory='Line Drive'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2,
+                           is_in_play=True, launch_speed=np.nan, trajectory='Ground Ball'),
+        _batter_pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1,
+                           is_in_play=True, launch_speed=80.0, trajectory='Ground Ball'),
+        _batter_pitch_row(gamepk='g3', game_date='2023-04-03', play_id=1, pitch_number=1),
+    ])
+
+    result = build_pbp_batter_rolling_feats(df, window=10)
+
+    row3 = result.loc[result['gamepk'] == 'g3']
+    assert row3['batter_roll_last10g_contact_trajectory_n'].iloc[0] == 3
+
+
+def test_build_pbp_batter_rolling_feats_exposes_foul_count_denominators():
+    """foul_swing_n (denominator of foul_rate: all swings) and
+    foul_or_inplay_n (denominator of contact_foul_rate: foul-or-in-play
+    events only, excluding whiffs) are two genuinely different sample
+    sizes — same dataset as
+    test_build_pbp_batter_rolling_feats_foul_rate_vs_contact_foul_rate_use_different_denominators,
+    which already establishes foul_rate=1/3, contact_foul_rate=1/2 rolled
+    into g2 (a whiff + a foul + a ball in play = 3 swings, 2 contact events)."""
+
+    df = pd.DataFrame([
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                           is_swing=True, pitch_call='Swinging Strike', is_swinging_strike=True),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2,
+                           is_swing=True, pitch_call='Foul'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=3,
+                           is_swing=True, pitch_call='In Play, Out(s)', is_in_play=True, trajectory='Fly Ball'),
+        _batter_pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1),
+    ])
+
+    result = build_pbp_batter_rolling_feats(df, window=10)
+
+    row2 = result.loc[result['gamepk'] == 'g2']
+    assert row2['batter_roll_last10g_foul_swing_n'].iloc[0] == 3
+    assert row2['batter_roll_last10g_foul_or_inplay_n'].iloc[0] == 2
+
+
+def test_build_pbp_batter_rolling_feats_exposes_two_strike_swing_count_denominator():
+    """two_strike_swing_n is the denominator behind two_strike_foul_rate —
+    same dataset as test_build_pbp_batter_rolling_feats_two_strike_foul_rate,
+    which already establishes two_strike_foul_rate=0.5 (1 foul / 2 two-strike
+    swings) rolled into g2."""
+
+    df = pd.DataFrame([
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                           count_strikes=2, is_swing=True, pitch_call='Foul'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2,
+                           count_strikes=2, is_swing=True, pitch_call='Swinging Strike', is_swinging_strike=True),
+        _batter_pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1),
+    ])
+
+    result = build_pbp_batter_rolling_feats(df, window=10)
+
+    row2 = result.loc[result['gamepk'] == 'g2']
+    assert row2['batter_roll_last10g_two_strike_swing_n'].iloc[0] == 2
 
 
 def test_build_pbp_batter_rolling_feats_column_names_no_collision_with_season_stats():
