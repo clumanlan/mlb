@@ -191,14 +191,85 @@ All three follow the same point-in-time-safe `_shift_to_last_season` pattern as 
 
 ---
 
+## 5C. Pitcher Feature Status — Implemented
+
+Pitcher season stats are built in `season_stats.py`, entry point `build_pbp_pitcher_feats(pbp)` (pbp-derived, 5 categories — the pitcher-side counterpart to §5's `build_pbp_batter_feats`) plus `build_pitcher_stats(pitcher_boxscore)` (box-score-derived traditional rates, counterpart to `build_batter_stats`). Same point-in-time-safe `_shift_to_last_season` pattern as §5 throughout.
+
+**Role-aware pooling** — `build_pbp_pitcher_feats_all_roles` and `build_pitcher_stats_all_roles` each build two variants and stack them: `sp` rows aggregated per individual `pitcher_id` (a starter's identity is known pre-game), `bullpen` rows pooled by `pitcher_team_id` (a specific reliever's identity isn't knowable pre-game — see §6's leakage note). Both halves are renamed onto a common `pitcher_key_id`/`pitcher_role` pair so `model_df` can join on that instead of `pitcher_id` alone; a swingman who both starts and relieves in the same season gets separate sp/bullpen rows rather than one blended aggregate.
+
+**Feature → function lookup** (search `season_stats.py` for the function name to see the exact aggregation):
+
+| Category | Representative columns (post-shift, e.g. via `build_pbp_pitcher_feats`) | Function |
+|---|---|---|
+| Traditional box-score rates | `pitcher_last_season_whip`, `_k_rate`, `_bb_rate`, `_strike_rate`, `_hr_rate` | `build_pitcher_stats` |
+| Stuff (pitch characteristics) | `pitcher_last_season_stuff_start_speed_mean`/`_max`/`_std`, `_end_speed_mean`/`_max`, `_perceived_velo_mean`/`_max`, `_spin_rate_mean`/`_max`, `_movement_magnitude_mean`/`_max`, `_pfx_z_mean`/`_max`, `_extension_mean`/`_max`/`_std`, `_speed_retention_mean` | `_create_pitcher_stuff_command_stats` (via `build_pbp_pitcher_feats`) |
+| Command (location/control) | `pitcher_last_season_command_in_play_rate`, `_swinging_strike_rate`, `_plate_x_std`, `_plate_z_normalized_std`, `_zone_rate`, `_ball_rate`, `_strike_rate`, `_called_strike_rate`, `_chase_rate`, `_zone_swing_rate`, `_first_pitch_strike_rate` | `_create_pitcher_stuff_command_stats` |
+| PA outcome (incl. FIP) | `pitcher_last_season_pa_strikeout_rate`, `_walk_rate`, `_hbp_rate`, `_hit_rate`, `_hr_rate`, `_single_rate`, `_xbh_rate`, `_fip`, `_avg_final_balls`/`_strikes`, `_full_count_rate` | `_create_pitcher_pa_outcome_stats` |
+| Last-inning-pitched | `pitcher_last_season_avg_last_inning`, `_std_last_inning`, `_avg_last_inning_velo`, `_last_inning_ball_rate`/`_strike_rate`, `_last_inning_avg_balls`/`_strikes`, `_last_inning_outs` | `_create_pitcher_last_inning_stats` |
+| Pitch count (workload) | `pitcher_last_season_game_avg_pitch_count`, `_std_pitch_count`, `_max_pitch_count` | `_create_pitcher_pitch_count_stats` |
+| In-play contact quality allowed | `pitcher_last_season_contact_hard_hit_rate`, `_gb_rate`, `_fb_rate`, `_ld_rate`, `_avg_launch_speed`, `_avg_launch_angle` | `_create_pitcher_contact_quality_stats` |
+
+**Known gaps, cross-referenced from §2 (not re-explained here):** `command_chase_rate`/`command_zone_swing_rate` share batters' all-pitches-denominator gap (Whiff/Chase/Z-Swing section); `contact_hard_hit_rate` uses the categorical `hardness == 'Hard'` field rather than the raw `launch_speed >= 95` threshold, unlike the more precise batter-side version (Hard-Hit Rate section); pitcher contact quality has no sweet-spot-rate counterpart to the batter side (Sweet-Spot % section).
+
+---
+
+## 5D. Rolling-Window Features — Implemented
+
+Every category in §5 and §5C also exists in a point-in-time **rolling** form — a value that updates game-by-game instead of once a season — built in `rolling_stats.py`. Same stat categories and formulas as `season_stats.py` throughout; `rolling_stats.py`'s own header comment points back to this glossary for definitions rather than duplicating them.
+
+**Two window types, one naming convention:**
+- `window='season'` → `{entity}_roll_season_{stat}` — expanding sum within `(entity_col, game_season)`, resets at every season boundary (the rolling analog of `_shift_to_last_season`'s season-level shift).
+- `window=<int N>` → `{entity}_roll_last{N}g_{stat}` — trailing N-game sum, **carries across season boundaries** (a recent-form window has no reason to reset just because the calendar flipped to a new year). `experiments/v3_interaction_feats/train.py` sets `SHORT_WINDOW_GAMES = 10` for this N.
+
+**Point-in-time safety rule:** every rolling column explicitly excludes the row's own game — `_rolling_sum`/`_rolling_max` compute `.cumsum().shift(1)` (season window) or `.rolling(window).sum().shift(1)` (int window) — so a rolling stat attached to a given game reflects only games strictly *before* it, never that game's own performance. This is enforced at every single game rather than once a year, making it a stricter version of the same no-leakage guarantee `_shift_to_last_season` gives at the season grain.
+
+**Correctness rule (see `rolling_stats.py` module docstring):** roll counts, never rates — every rate is a numerator/denominator pair rolled separately as raw sums, and divided exactly once at the end (`_finalize_rates`). Averaging per-game rates directly would be wrong whenever games have different sample sizes (e.g. a 1-AB game and a 5-AB game shouldn't count equally toward a rolling AVG). Rolling `_std` columns (e.g. `stuff_start_speed_std`) go through `_rolling_pooled_std`, which derives a rolling sample std from rolled per-game `(n, sum, sum_of_squares)` triples — an exact rolling std can't be reconstructed from per-game std/mean alone.
+
+**Entry points:**
+
+| What it rolls | Entry point | Rolling equivalent of |
+|---|---|---|
+| Batter box-score rates (ba/slg/iso/babip) | `build_batter_rolling_stats(batter_boxscore, window)` | `build_batter_stats` |
+| Pitcher box-score rates (whip/k_rate/bb_rate/strike_rate/hr_rate), role-aware | `build_pitcher_rolling_stats_all_roles(pitcher_boxscore, pbp, window)` | `build_pitcher_stats_all_roles` |
+| Pitcher pbp-derived (stuff/command/PA-outcome+FIP/last-inning/pitch-count/contact-quality), role-aware | `build_pbp_pitcher_rolling_feats_all_roles(pbp, window)` | `build_pbp_pitcher_feats_all_roles` |
+| Batter pbp-derived (PA-outcome/plate-discipline/in-play-contact/foul-contact/two-strike-foul) | `build_pbp_batter_rolling_feats(pbp, window)` | `build_pbp_batter_feats` |
+
+Role-aware rolling functions pool bullpen rows per `(team_id, gamepk)` *before* rolling (a real bullpen outing routinely uses 2+ relievers in one game — rolling per individual reliever first would fan out and corrupt the `shift(1)` exclusion across teammates sharing a game date).
+
+**Sample-size columns are kept as features, not just internal working columns** — `n_pitches`, `pa_total`, `contact_n`, `games_n` (pitcher pbp-rolling) and `plate_appearances`/`ab`/`ip` (box-score rolling) all survive into the final output. This lets a model learn to trust a rolling rate less when it's built from a thin recent window — see §5E, which turns this same signal into an explicit engineered feature.
+
+**Scope note:** rolling features do not currently exist for handedness/platoon splits (§5B) or park factors (§3) — both remain season-level only.
+
+---
+
+## 5E. Engineered Interaction Features (v3) — Implemented
+
+Built in `processing/features/interaction_feats.py`, consumed by `experiments/v3_interaction_feats/train.py`. Two column families, both derived from the short-window-vs-season-window pairs §5D produces.
+
+**Pair-finding helpers:**
+- `find_rolling_trend_pairs(columns)` — matches every `*_roll_last{N}g_{stat}` column to its `*_roll_season_{stat}` counterpart (same entity prefix, same stat name).
+- `find_sample_size_col(columns, rate_col)` — finds the sample-size denominator sharing a rate's rolling prefix, checked in priority order (`plate_appearances` → `pa_total` → `ab` → `ip` → `n_pitches` — a rate's own true PA denominator first, coarser fallbacks after).
+
+**`build_trend_features(df, pairs)`** — per pair, adds:
+- `{prefix}_trend_ratio_{stat}` = short-window value / season value (>1 = running hot vs. own baseline, <1 = cold; zero-season-guarded).
+- `{prefix}_trend_direction_{stat}` = `sign(short − season)` — a coarse +1/−1/0 hot/cold/flat indicator, magnitude discarded.
+
+**`build_shrinkage_weight_features(df, rate_to_sample_col, k=10.0)`** — per rate column, adds:
+- `{prefix}_shrinkage_weight_{stat}` = `sample / (sample + k)` — a smooth 0→1 confidence weight, 0.5 at `sample == k`.
+- `{prefix}_shrunk_{stat}` = `rate × weight` — an explicit product between a rolling rate and its own sample size.
+
+**Why these exist:** built only after a PDP (partial dependence) diagnostic — fitting a Random Forest on raw rolling features alone and checking its 2-way partial dependence surfaces — showed neither interaction was already being learned implicitly (see the PDP diagnostics section of `experiments/v3_interaction_feats/train.py`). An earlier version (`build_trend_diff_features`, a plain `short − season` difference) dominated feature importance but measurably *hurt* held-out val metrics (ROC-AUC, PR-AUC, log loss, Brier, decile spread all worse than the raw-features baseline) — a deterministic linear combination of two already-present columns gives a tree no information it couldn't already reconstruct with an extra split, while diluting `RandomForestClassifier`'s `max_features='sqrt'` random split sampling with a near-duplicate column. Ratio/direction (non-linear/coarsened transforms) were tried instead as a different hypothesis, not a guaranteed fix.
+
+---
+
 ## 6. Practical Notes for Feature Engineering
 
 - **Stability vs. sample size:** Barrel%, K%, BB%, and Hard-Hit% stabilize (become self-predictive) much faster than BA or BABIP. On partial-season data, prefer the "sticky" metrics as leading features and treat outcome-based rate stats (AVG, ERA) with more caution.
 - **xStats vs. actual stats as features:** using both the actual and expected version of a stat (once xwOBA exists here) lets a model implicitly capture "performing above/below expected skill" — a regression-candidate signal.
 - **Avoid leakage — repo-specific:** every `build_*` function in `season_stats.py` handles this via `_shift_to_last_season`, which shifts `game_season` forward one year and renames any column containing `season_` to `last_season_` (e.g. `batter_season_ba` → `batter_last_season_ba`) so a season's stats can only be joined onto *next* season's games, never the same one. Any new build function must follow the same pattern — shift once, at the top-level `build_*` entry point, not inside a private `_create_*` helper.
-- **Avoid leakage — realized vs. expected pitcher role:** `pitcher_role` (`'sp'`/`'bullpen'`) reflects who *actually* pitched a PA — only knowable after the game, since a manager might pull his starter after 4 innings or let him go 8. Every pitcher-side feature merge in `experiments/v2_rolling_features/train.py` (season stats, rolling stats, hand-split stats) is gated on `expected_pitcher_role`/`expected_pitcher_key_id` (`processing/features/expected_role.py`), not the realized `pitcher_role` — a pre-game-knowable estimate built from the starter's own historical depth. Realized `pitcher_role` is still used, deliberately, inside the `build_*` functions in `season_stats.py`/`rolling_stats.py` themselves (a pitcher's own season aggregate should reflect his true starts, not a guess) — the fix is specifically at the join/gating layer, not the aggregation layer. Any new pitcher-side feature merged into `model_df` must key on `expected_pitcher_key_id`/`expected_pitcher_role`, never the realized columns (which are kept in the frame only for diagnostics, e.g. checking `expected_pitcher_role`'s agreement rate against the realized truth on historical data).
+- **Avoid leakage — realized vs. expected pitcher role:** `pitcher_role` (`'sp'`/`'bullpen'`) reflects who *actually* pitched a PA — only knowable after the game, since a manager might pull his starter after 4 innings or let him go 8. Every pitcher-side feature merge in `experiments/v3_interaction_feats/train.py` (season stats, rolling stats, hand-split stats) is gated on `expected_pitcher_role`/`expected_pitcher_key_id` (`processing/features/expected_role.py`), not the realized `pitcher_role` — a pre-game-knowable estimate built from the starter's own historical depth. Realized `pitcher_role` is still used, deliberately, inside the `build_*` functions in `season_stats.py`/`rolling_stats.py` themselves (a pitcher's own season aggregate should reflect his true starts, not a guess) — the fix is specifically at the join/gating layer, not the aggregation layer. Any new pitcher-side feature merged into `model_df` must key on `expected_pitcher_key_id`/`expected_pitcher_role`, never the realized columns (which are kept in the frame only for diagnostics, e.g. checking `expected_pitcher_role`'s agreement rate against the realized truth on historical data).
 - **Data sources:** Baseball Savant (Statcast layer, sections 1–2), FanGraphs (sabermetric layer, section 3, easiest CSV export), Retrosheet (raw play-by-play if computing from scratch). This repo's own raw data comes from the MLB Stats API (`raw_data/games/*`, `raw_data/playbyplay/*`) — confirm which Savant/FanGraphs fields, if any, are already present in that pull before assuming a ❌ gap actually requires a new source.
 
 ---
 
-*Compiled as a feature-engineering reference for `hit_predictor`. Cross-check the "In this repo" column against `src/models/hit_predictor/processing/schema.py` and `src/data/modules/preprocessing.py` if either file changes — this glossary reflects their shape as of the completed batter + pitcher season-stats implementation in `season_stats.py`. `season_stats.py` itself points back here in a header comment — the two files are meant to be read together, not duplicated.*
+*Compiled as a feature-engineering reference for `hit_predictor`. Cross-check the "In this repo" column against `src/models/hit_predictor/processing/schema.py` and `src/data/modules/preprocessing.py` if either file changes — this glossary reflects their shape as of the completed batter + pitcher season-stats implementation in `season_stats.py` (§5, §5B, §5C), the rolling-window implementation in `rolling_stats.py` (§5D), and the v3 engineered interaction features in `interaction_feats.py` (§5E). `season_stats.py` and `rolling_stats.py` both point back here in a header comment — these files are meant to be read together, not duplicated.*
