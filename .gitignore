@@ -9,8 +9,8 @@ dist/
 *.egg-info/
 
 
-# Data (usually too large / sensitive for git)
-data/
+# Data (usually too large / sensitive for git) — anchored: must not match src/data/, which is real source code
+/data/
 
 # Terraform state (can contain secrets)
 terraform/.terraform/
