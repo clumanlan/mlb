@@ -1,6 +1,8 @@
 # Baseball PA Model Dashboard — Spec
 
-A reusable Streamlit dashboard for diagnosing per-plate-appearance binary classification models (batter hit/no-hit, pitcher K/no-K). Targeted TDD on the math that's hard to eyeball; everything else built and verified visually.
+**Status: implemented.** Built at top-level `batter_pa_model/` (driver) + `shared/model_dashboard/` (portable package), per the acceptance criteria at the bottom of this doc. Kept as a reference for the design rationale (why each module is/isn't tested, the 3-step error-analysis framework) rather than as a pending to-do — read it to understand *why* the dashboard is shaped this way, not as a build checklist.
+
+A reusable Streamlit dashboard for diagnosing per-plate-appearance binary classification models (batter hit/no-hit, pitcher K/no-K). Targeted TDD on the math that's hard to eyeball; everything else built and verified visually. Built portable from the start — the same dashboard is meant to serve every model in the planned multi-model system (see `CLAUDE.md`'s "Model Layer" section), not just `hit_predictor`.
 
 ## Goals
 

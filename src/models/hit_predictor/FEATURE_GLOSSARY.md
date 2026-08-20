@@ -262,6 +262,30 @@ Built in `processing/features/interaction_feats.py`, consumed by `experiments/v3
 
 ---
 
+## 5F. Game Context Features — Implemented
+
+Built in `processing/features/game_context.py`, consumed by `experiments/v4_pitcher_expected_adj/train.py`. Pre-game-knowable game-level context (venue/calendar/team form/rest/probable starters) — deliberately excludes any in-game state (inning, count, score) that isn't knowable before first pitch.
+
+**Calendar decomposition** — `build_datetime_features(df, datetime_col='game_datetime')`. fastai `add_datepart`-style: exposes raw calendar parts (`game_dt_year/month/week/day/dayofweek/dayofyear`, month/quarter/year start/end flags, `game_dt_hour/minute`) and lets the model find any pattern itself, rather than hand-picking a single derived flag. No day/night flag — `game_datetime` is UTC, and a UTC-hour heuristic would need a venue-timezone lookup not currently ingested (❌ gap, deferred). No raw epoch/"Elapsed" column, by design (see `test_game_context.py`).
+
+**Doubleheader flag** — `build_doubleheader_flag(df, code_col='doubleheader')`. `True` for the raw schedule's `'Y'`/`'S'` doubleheader codes, both games of the pair flagged. ⚠️ needs `doubleheader` from raw `raw_data/games/schedule`, not yet in `processed_data/games/schedule`'s `SCHEDULE_COLUMNS` — existing processed files need reprocessing to pick it up; v4 works around this with a light column-pruned raw read rather than waiting on a full reprocessing job.
+
+**Team win/loss record & rest** — `_team_game_long(schedule)` reshapes schedule into one row per `(team_id, gamepk)`. `build_team_win_loss_record(schedule, window)` rolls win_n/games_n/runs_scored/runs_allowed/run_diff forward (`window='season'` expanding, or trailing-N-game, same `_rolling_sum` engine and prefix convention as §5D, sorted by `game_datetime` not `game_date` alone — a doubleheader's two games share a date, and only `game_datetime` orders them correctly so game 1's record doesn't leak game 2's same-day result). `build_team_rest_days(schedule)` gives calendar days since that team's last game (0 for game 2 of a same-day doubleheader, `NaN` for a team's first game in the data).
+
+**Probable starters** — `build_probable_starters(schedule, game_info)`. One row per `(team_id, gamepk)` with that team's probable starting pitcher ID — joins schedule's team identity to `game_info`'s `probable_pitcher_{home,away}_id` (schedule itself only has probable-pitcher *names*, not IDs). Left join so a game missing a `game_info` row still gets team rows with a null starter rather than being dropped.
+
+**Starter innings estimate (Epic E)** — replaces a fixed season baseline with an in-season-aware blend:
+- `build_pitcher_start_ip_this_season(pitcher_boxscore, pbp)` — this-season rolling avg IP/start and starts-so-far, expanding + `shift(1)`, up to (not including) the current start.
+- `build_expected_start_innings(pitcher_start_ip_last_season, pitcher_start_ip_this_season, league_avg_start_ip, k=5.0)` — shrinkage blend: `weight = starts_n / (starts_n + k)`, 0 at a season opener (trust last season fully) rising toward 1 as this season's own sample grows. Baseline itself falls back last-season → league-wide → this-season-alone for a pitcher with no prior-season row. Every input (not just the blended output) survives as its own column, same "expose the building blocks" principle as §5D.
+
+**Inning-based pitcher-role gating (replaces `expected_role.py`'s PA-position version)** — `build_pitcher_role_by_inning(team_game, max_innings=9)` expands one row per `(team_id, gamepk)` carrying an `expected_start_innings` estimate into one row per inning, `'sp'` up through `ceil(expected_start_innings)` (clipped to `[0, max_innings]`), `'bullpen'` after. The direct per-inning equivalent of `expected_role.assign_expected_pitcher_role_by_inning` (below) — swapping the v2/v3 training pipeline over to it is a separate migration, not yet done.
+
+`processing/features/expected_role.py` gained the matching PA-level function, `assign_expected_pitcher_role_by_inning(pa_outcome, expected_start_innings)`: converts the existing `estimated_team_pa_position` into an estimated inning via a fixed `AVG_TEAM_PA_PER_INNING = 4.3` league-average approximation (same spirit as `estimated_team_pa_position`'s own 9-batter-cycle assumption — not exact for any single inning, an accepted approximation), compares it against the starter's `expected_start_innings`, and derives `expected_pitcher_role`/`expected_times_through_order`/`expected_pitcher_key_id` the same way the original `assign_expected_pitcher_role` does. The original PA-position/batters-faced version (`assign_expected_pitcher_role`, gated on `pitcher_last_season_start_avg_batters_faced_per_start`) is **not removed** — both versions currently coexist; v4 is the experiment testing whether the inning-based version is actually better, not a proven replacement yet.
+
+**Active experiment** — `experiments/v4_pitcher_expected_adj/train.py`: same base pipeline as `v2_rolling_features` (season + rolling batter/pitcher stats, park factors, TTO splits) plus (1) the inning-based gating swap and (2) every new game-context feature above (`game_dt_*`, `is_doubleheader`, `batting_team_roll_*`/`pitching_team_roll_*` win/loss+rest for both sides of the PA), isolating the effect of both changes together against v2's raw-features baseline.
+
+---
+
 ## 6. Practical Notes for Feature Engineering
 
 - **Stability vs. sample size:** Barrel%, K%, BB%, and Hard-Hit% stabilize (become self-predictive) much faster than BA or BABIP. On partial-season data, prefer the "sticky" metrics as leading features and treat outcome-based rate stats (AVG, ERA) with more caution.
@@ -272,4 +296,4 @@ Built in `processing/features/interaction_feats.py`, consumed by `experiments/v3
 
 ---
 
-*Compiled as a feature-engineering reference for `hit_predictor`. Cross-check the "In this repo" column against `src/models/hit_predictor/processing/schema.py` and `src/data/modules/preprocessing.py` if either file changes — this glossary reflects their shape as of the completed batter + pitcher season-stats implementation in `season_stats.py` (§5, §5B, §5C), the rolling-window implementation in `rolling_stats.py` (§5D), and the v3 engineered interaction features in `interaction_feats.py` (§5E). `season_stats.py` and `rolling_stats.py` both point back here in a header comment — these files are meant to be read together, not duplicated.*
+*Compiled as a feature-engineering reference for `hit_predictor`. Cross-check the "In this repo" column against `src/models/hit_predictor/processing/schema.py` and `src/data/modules/preprocessing.py` if either file changes — this glossary reflects their shape as of the completed batter + pitcher season-stats implementation in `season_stats.py` (§5, §5B, §5C), the rolling-window implementation in `rolling_stats.py` (§5D), the v3 engineered interaction features in `interaction_feats.py` (§5E), and the v4 game-context features in `game_context.py` (§5F). `season_stats.py` and `rolling_stats.py` both point back here in a header comment — these files are meant to be read together, not duplicated.*

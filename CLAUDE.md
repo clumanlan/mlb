@@ -49,7 +49,7 @@ Layer 1 — Raw Ingestion       ✅  fetch from MLB Stats API → S3 (raw_data/)
 Layer 2 — Validation          ✅  quality gate before downstream runs
 Layer 3 — Feature Engineering ⏳  rolling window features → S3 (features/offline/)
 Layer 4 — Feature Store       ⬜  Feast (offline: S3/Athena, online: DynamoDB)
-Layer 5 — Model Training      ⬜  XGBoost baseline → attention model
+Layer 5 — Model Training      ⏳  XGBoost baseline → attention model (see "Model Layer" below)
 Layer 6 — Prediction Pipeline ⬜  daily batch inference, lineup-aware
 Layer 7 — MLOps               ⬜  MLflow, Evidently AI, CloudWatch
 ```
@@ -208,6 +208,25 @@ aws lambda invoke \
 **Pattern:** each transform function takes `year: str`, reads the full season's processed Parquet from S3 via `data_readers.py`, computes rolling windows in DuckDB (registered as in-memory tables), and returns a DataFrame. The handler then slices to a single date snapshot and writes to S3.
 
 **Point-in-time safety:** rolling windows close the day *before* the target game date — no same-day leakage.
+
+---
+
+## Model Layer — `src/models/`
+
+The end goal is a shared feature store feeding **multiple models** (batter hit/no-hit, pitcher K/no-K, and others as they're built). `hit_predictor` (`src/models/hit_predictor/`) is the first model and is currently how that direction gets validated — it runs its own bespoke processing pipeline rather than consuming from the Layer 4 Feast store above, because the feature engineering it needs (PA-grain, point-in-time-safe, extensively feature-engineered) is still being worked out model-side before it's worth generalizing into the shared store. Expect this pipeline's proven patterns (rolling windows, point-in-time shifting, role-aware pitcher splits) to migrate toward Layer 4 once a second model needs the same features.
+
+**Structure:**
+- `processing/pipeline.py` — assembles the PA-outcome training grain from raw pbp/boxscore/schedule/game_info (`create_pa_outcome`)
+- `processing/features/` — one file per feature family: `season_stats.py` (season-level batter/pitcher rates), `rolling_stats.py` (game-by-game rolling windows), `park_factors.py`, `expected_role.py` (pre-game-knowable SP/bullpen role gating), `interaction_feats.py` (trend/shrinkage features), `game_context.py` (calendar, team form/rest, probable starters, starter-innings estimate)
+- `processing/schema.py` — pbp column schema, the single source of truth this pipeline reads against
+- `baseline/` — naive and rules-based baselines, run before any real model (`baseline/rules/run_baseline.py`, `baseline/model/run.py`)
+- `experiments/v{N}_*/train.py` — versioned experiments, each an isolated, runnable pipeline (own `mlruns/` for MLflow tracking); read the newest version's summary comment block first — it documents exactly what changed vs. the prior version
+- `utils/` — `eval.py` (metrics + calibration plots), `mlflow_logging.py`, `model_prep.py` (missing-indicator/impute/encode helpers)
+- `config.yaml` — seasons (train/val/test split), target column, drop columns
+
+**Reference docs:** `FEATURE_GLOSSARY.md` is the feature-by-feature reference (what each stat measures, why, and whether it's implemented) — check it before adding a new feature or wondering if one already exists. `dashboard_spec.md` documents the portable Streamlit model-diagnostics dashboard (implemented at top-level `batter_pa_model/` + `shared/model_dashboard/`) used to debug any PA-grain model, not just this one. `BENCHMARKS.md` documents what "beating baseline" means here (naive-floor comparison vs. an economic/CLV-aware bar) and synthesizes external research on per-PA hit prediction ceilings and betting profitability — read before concluding a flat log_loss delta means the pipeline is broken, or before building the devig/CLV eval layer.
+
+**Point-in-time safety** here follows the same rule as Layer 3 above, enforced more granularly: season-level stats shift forward one season (`_shift_to_last_season`), rolling stats exclude the current row via `.shift(1)`, and pitcher role/TTO features are gated on pre-game-*estimable* signals (lineup position, starter history) rather than the realized in-game role, which is only knowable after the fact.
 
 ---
 
