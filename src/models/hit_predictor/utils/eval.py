@@ -25,6 +25,57 @@ from sklearn.metrics import (
 )
 
 
+def aggregate_pa_predictions_to_game(df, group_cols=("batter_id", "gamepk"),
+                                      y_true_col="is_hit", y_prob_col="pred_prob"):
+    """
+    Collapse PA-grain predictions to one row per group (default: per batter
+    per game) — the grain a DK "1+ hits" prop actually resolves on, per
+    BENCHMARKS.md §4.5.
+
+    game_pred_prob = 1 - prod(1 - p) over that group's PAs: the probability
+    of at least one hit, treating each PA's predicted probability as an
+    independent draw. Rows with a NaN prediction are skipped from the
+    product entirely (not treated as p=0 or p=1) rather than dropping the
+    whole game.
+
+    game_is_hit = 1 if any PA in the group was a hit, else 0 — the actual
+    game-level outcome the aggregated prediction is evaluated against.
+
+    Independence across a batter's PAs in the same game is an approximation
+    (same pitcher/park/weather within a game breaks strict independence) —
+    treated as good enough for this diagnostic, not asserted as exact.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        PA-grain rows with group_cols, y_true_col, y_prob_col.
+    group_cols : sequence of str, default ("batter_id", "gamepk")
+    y_true_col : str, default "is_hit"
+    y_prob_col : str, default "pred_prob"
+
+    Returns
+    -------
+    pd.DataFrame with group_cols, game_pred_prob, game_is_hit, n_pa
+    (PA count contributing to the group, informational).
+    """
+    group_cols = list(group_cols)
+
+    def _combine(group):
+        probs = group[y_prob_col].dropna()
+        game_pred_prob = 1 - (1 - probs).prod()
+        return pd.Series({
+            "game_pred_prob": game_pred_prob,
+            "game_is_hit": int(group[y_true_col].max()),
+            "n_pa": len(group),
+        })
+
+    return (
+        df.groupby(group_cols, as_index=False)
+        .apply(_combine, include_groups=False)
+        .reset_index(drop=True)
+    )
+
+
 def _make_bucket_row(label, y_true, y_prob, min_n):
     n = len(y_true)
     return {
