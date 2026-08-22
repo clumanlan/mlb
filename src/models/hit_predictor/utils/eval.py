@@ -76,6 +76,64 @@ def aggregate_pa_predictions_to_game(df, group_cols=("batter_id", "gamepk"),
     )
 
 
+def run_pa_vs_game_grain_check(val_df, y_val, proba, group_cols=("batter_id", "gamepk"),
+                                pa_min_n=500, game_min_n=200, n_bins=10, verbose=True):
+    """
+    Evaluate a model's val-split predictions at both PA grain and player-game
+    grain (P(1+ hits) via aggregate_pa_predictions_to_game), per BENCHMARKS.md
+    §4.5. Reusable version of the comparison scripts/per_game_aggregation_check.py
+    ran inline for v2 — any experiment's train.py can call this once it has
+    val_df/y_val/proba, instead of re-deriving the whole pipeline to get here.
+
+    Parameters
+    ----------
+    val_df : pd.DataFrame
+        Validation split, must contain group_cols (default batter_id/gamepk).
+    y_val : array-like of 0/1
+        True labels, same length/order as val_df and proba.
+    proba : array-like of float
+        Predicted hit probabilities, same length/order as val_df and y_val.
+    group_cols : sequence of str, default ("batter_id", "gamepk")
+        Passed through to aggregate_pa_predictions_to_game.
+    pa_min_n : int, default 500
+        min_n passed to the PA-grain evaluate_hit_predictor call.
+    game_min_n : int, default 200
+        min_n passed to the game-grain evaluate_hit_predictor call.
+    n_bins : int, default 10
+        n_bins passed to both evaluate_hit_predictor calls.
+    verbose : bool, default True
+        Print the PA-grain-vs-game-grain headline comparison.
+
+    Returns
+    -------
+    (pa_metrics, game_metrics, game_results) : tuple of (dict, dict, pd.DataFrame)
+    """
+    group_cols = list(group_cols)
+
+    pa_results = val_df[group_cols].copy()
+    pa_results["is_hit"] = np.asarray(y_val)
+    pa_results["pred_prob"] = np.asarray(proba)
+
+    pa_metrics = evaluate_hit_predictor(y_true=y_val, y_prob=proba, n_bins=n_bins, min_n=pa_min_n)
+
+    game_results = aggregate_pa_predictions_to_game(pa_results, group_cols=group_cols)
+    game_metrics = evaluate_hit_predictor(
+        y_true=game_results["game_is_hit"], y_prob=game_results["game_pred_prob"],
+        n_bins=n_bins, min_n=game_min_n, base_rate=game_results["game_is_hit"].mean(),
+    )
+
+    if verbose:
+        print(f"\n{len(pa_results)} PA rows -> {len(game_results)} batter-game rows "
+              f"(mean {pa_results.groupby(group_cols).size().mean():.2f} PA/game)")
+        print("\n" + "#" * 75)
+        print("# HEADLINE COMPARISON: PA GRAIN vs GAME GRAIN")
+        print("#" * 75)
+        for key in ("reliability", "resolution", "roc_auc", "brier", "log_loss", "ece"):
+            print(f"  {key:12s}  PA={pa_metrics[key]:.4f}   GAME={game_metrics[key]:.4f}")
+
+    return pa_metrics, game_metrics, game_results
+
+
 def _make_bucket_row(label, y_true, y_prob, min_n):
     n = len(y_true)
     return {
