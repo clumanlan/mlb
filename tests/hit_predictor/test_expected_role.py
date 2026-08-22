@@ -1,7 +1,10 @@
 import numpy as np
 import pandas as pd
 
-from models.hit_predictor.processing.features.expected_role import assign_expected_pitcher_role
+from models.hit_predictor.processing.features.expected_role import (
+    assign_expected_pitcher_role,
+    assign_expected_pitcher_role_by_inning,
+)
 
 
 def _make_pa_outcome(**overrides):
@@ -162,6 +165,126 @@ def test_assign_expected_pitcher_role_key_id_is_pitcher_team_id_for_expected_bul
     pa_outcome = _make_pa_outcome(estimated_team_pa_position=25, starting_pitcher_id='10', pitcher_team_id='T1')
     result = assign_expected_pitcher_role(
         pa_outcome, _make_pitcher_start_depth_stats(), _make_league_avg_start_depth()
+    )
+
+    assert result.loc[0, 'expected_pitcher_key_id'] == 'T1'
+
+
+# --------------------------- INNING-BASED REPLACEMENT (Epic E / v4) --------------------------- #
+# Same job as assign_expected_pitcher_role (pre-game-knowable sp/bullpen gate for a PA),
+# but comparing an estimated INNING (from estimated_team_pa_position via a fixed
+# avg-team-PAs-per-inning approximation) against the starter's own expected_start_innings
+# (game_context.build_expected_start_innings — already a last-season/league/this-season
+# shrinkage blend) instead of comparing raw PA position against a batters-faced average.
+
+def _make_pa_outcome_inning(**overrides):
+    row = {
+        'starting_pitcher_id': '10',
+        'pitcher_team_id': 'T1',
+        'gamepk': 'g1',
+        'estimated_team_pa_position': 10,
+        'batter_pa_number': 2,
+    }
+    row.update(overrides)
+    return pd.DataFrame([row])
+
+
+def _make_expected_start_innings(**overrides):
+    row = {'personId': '10', 'gamepk': 'g1', 'expected_start_innings': 5.0}
+    row.update(overrides)
+    return pd.DataFrame([row])
+
+
+def _empty_expected_start_innings():
+    return pd.DataFrame({
+        'personId': pd.Series(dtype='object'),
+        'gamepk': pd.Series(dtype='object'),
+        'expected_start_innings': pd.Series(dtype='float64'),
+    })
+
+
+def test_assign_expected_pitcher_role_by_inning_labels_sp_when_estimated_inning_within_expected_depth():
+    """PA position 10 -> estimated_inning = ceil(10/4.3) = 3, well within
+    this starter's expected_start_innings of 5.0 -> 'sp'."""
+
+    result = assign_expected_pitcher_role_by_inning(
+        _make_pa_outcome_inning(estimated_team_pa_position=10), _make_expected_start_innings()
+    )
+
+    assert result.loc[0, 'estimated_inning'] == 3
+    assert result.loc[0, 'expected_pitcher_role'] == 'sp'
+
+
+def test_assign_expected_pitcher_role_by_inning_labels_bullpen_when_estimated_inning_exceeds_expected_depth():
+    """PA position 25 -> estimated_inning = ceil(25/4.3) = 6, past this
+    starter's expected_start_innings of 5.0 -> 'bullpen'."""
+
+    result = assign_expected_pitcher_role_by_inning(
+        _make_pa_outcome_inning(estimated_team_pa_position=25), _make_expected_start_innings()
+    )
+
+    assert result.loc[0, 'estimated_inning'] == 6
+    assert result.loc[0, 'expected_pitcher_role'] == 'bullpen'
+
+
+def test_assign_expected_pitcher_role_by_inning_boundary_inning_equal_to_expected_depth_is_sp():
+    """Locks in <= (not <): PA position 19 -> estimated_inning =
+    ceil(19/4.3) = 5, exactly at expected_start_innings (5.0) -> still 'sp',
+    not the first bullpen inning."""
+
+    result = assign_expected_pitcher_role_by_inning(
+        _make_pa_outcome_inning(estimated_team_pa_position=19), _make_expected_start_innings()
+    )
+
+    assert result.loc[0, 'estimated_inning'] == 5
+    assert result.loc[0, 'expected_pitcher_role'] == 'sp'
+
+
+def test_assign_expected_pitcher_role_by_inning_defaults_to_sp_when_no_estimate_exists():
+    """No matching row in expected_start_innings at all (shouldn't happen
+    given build_expected_start_innings' own league-wide fallback, but not
+    assumed here) -> never gate to bullpen purely for lack of information."""
+
+    result = assign_expected_pitcher_role_by_inning(
+        _make_pa_outcome_inning(estimated_team_pa_position=999), _empty_expected_start_innings()
+    )
+
+    assert result.loc[0, 'expected_pitcher_role'] == 'sp'
+
+
+def test_assign_expected_pitcher_role_by_inning_times_through_order_is_capped_at_three_for_expected_sp():
+    result = assign_expected_pitcher_role_by_inning(
+        _make_pa_outcome_inning(estimated_team_pa_position=10, batter_pa_number=5),
+        _make_expected_start_innings(),
+    )
+
+    assert result.loc[0, 'expected_pitcher_role'] == 'sp'
+    assert result.loc[0, 'expected_times_through_order'] == 3
+
+
+def test_assign_expected_pitcher_role_by_inning_times_through_order_is_nan_for_expected_bullpen():
+    result = assign_expected_pitcher_role_by_inning(
+        _make_pa_outcome_inning(estimated_team_pa_position=25, batter_pa_number=5),
+        _make_expected_start_innings(),
+    )
+
+    assert result.loc[0, 'expected_pitcher_role'] == 'bullpen'
+    assert np.isnan(result.loc[0, 'expected_times_through_order'])
+
+
+def test_assign_expected_pitcher_role_by_inning_key_id_is_starting_pitcher_id_for_expected_sp():
+    result = assign_expected_pitcher_role_by_inning(
+        _make_pa_outcome_inning(estimated_team_pa_position=10, starting_pitcher_id='10', pitcher_team_id='T1'),
+        _make_expected_start_innings(),
+    )
+
+    assert result.loc[0, 'expected_pitcher_key_id'] == '10'
+
+
+def test_assign_expected_pitcher_role_by_inning_key_id_is_pitcher_team_id_for_expected_bullpen():
+    result = assign_expected_pitcher_role_by_inning(
+        _make_pa_outcome_inning(estimated_team_pa_position=25, starting_pitcher_id='10', pitcher_team_id='T1'),
+        _make_expected_start_innings(),
     )
 
     assert result.loc[0, 'expected_pitcher_key_id'] == 'T1'

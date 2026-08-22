@@ -207,6 +207,7 @@ def test_create_pa_outcome_includes_venue_id():
     pbp = pd.DataFrame([{
         'gamepk': '1',
         'batter_team_name': 'Cubs',
+        'batter_team_id': 'T2',
         'play_id': 'p1',
         'pitcher_id': '10',
         'pitcher_name': 'Pitcher One',
@@ -251,6 +252,7 @@ def test_create_pa_outcome_includes_starting_pitcher_id():
     pbp = pd.DataFrame([{
         'gamepk': '1',
         'batter_team_name': 'Cubs',
+        'batter_team_id': 'T2',
         'play_id': 'p1',
         'pitcher_id': '20',
         'pitcher_name': 'Reliever One',
@@ -296,6 +298,7 @@ def test_create_pa_outcome_includes_estimated_team_pa_position():
     pbp = pd.DataFrame([{
         'gamepk': '1',
         'batter_team_name': 'Cubs',
+        'batter_team_id': 'T2',
         'play_id': 'p1',
         'pitcher_id': '10',
         'pitcher_name': 'Pitcher One',
@@ -340,6 +343,7 @@ def test_create_pa_outcome_does_not_expose_realized_times_through_order():
     pbp = pd.DataFrame([{
         'gamepk': '1',
         'batter_team_name': 'Cubs',
+        'batter_team_id': 'T2',
         'play_id': 'p1',
         'pitcher_id': '10',
         'pitcher_name': 'Pitcher One',
@@ -387,6 +391,7 @@ def test_create_pa_outcome_includes_batter_and_pitcher_hand():
     pbp = pd.DataFrame([{
         'gamepk': '1',
         'batter_team_name': 'Cubs',
+        'batter_team_id': 'T2',
         'play_id': 'p1',
         'pitcher_id': '10',
         'pitcher_name': 'Pitcher One',
@@ -434,6 +439,7 @@ def test_create_pa_outcome_includes_pitcher_role():
     pbp = pd.DataFrame([{
         'gamepk': '1',
         'batter_team_name': 'Cubs',
+        'batter_team_id': 'T2',
         'play_id': 'p1',
         'pitcher_id': '10',
         'pitcher_name': 'Pitcher One',
@@ -478,6 +484,7 @@ def test_create_pa_outcome_includes_pitcher_team_id():
     pbp = pd.DataFrame([{
         'gamepk': '1',
         'batter_team_name': 'Cubs',
+        'batter_team_id': 'T2',
         'play_id': 'p1',
         'pitcher_id': '10',
         'pitcher_name': 'Pitcher One',
@@ -511,3 +518,49 @@ def test_create_pa_outcome_includes_pitcher_team_id():
     result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
 
     assert result.loc[0, 'pitcher_team_id'] == 'T1'
+
+
+def test_create_pa_outcome_includes_batter_team_id():
+    """batter_team_id (distinct from the already-present batter_team_name)
+    is needed to merge team-level game-context features (win/loss record,
+    rest days — game_context.py) onto the BATTING team's perspective,
+    mirroring how pitcher_team_id already does this for the pitching side."""
+
+    pbp = pd.DataFrame([{
+        'gamepk': '1',
+        'batter_team_name': 'Cubs',
+       'batter_team_id': 'T2',
+        'batter_team_id': 'T2',
+        'play_id': 'p1',
+        'pitcher_id': '10',
+        'pitcher_name': 'Pitcher One',
+        'batter_id': '1',
+        'batter_name': 'Batter One',
+        'is_hit': 1,
+        'pitcher_throw_hand': 'L',
+        'batter_bat_side': 'S',
+        'pitcher_role': 'bullpen',
+        'pitcher_team_id': 'T1',
+        'starting_pitcher_id': '99',
+        'batter_pa_number': 1,
+    }])
+    batter_boxscore = pd.DataFrame([{
+        'gamepk': '1',
+        'personId': '1',
+        'batting_order': 3,
+    }])
+    game_info = pd.DataFrame([{
+        'gamepk': '1',
+        'game_season': 2023,
+        'weather_condition': 'Sunny',
+        'weather_temp': '75',
+    }])
+    schedule = pd.DataFrame([{
+        'gamepk': '1',
+        'game_date': pd.Timestamp('2023-05-01'),
+        'venue_id': 'V1',
+    }])
+
+    result = create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
+
+    assert result.loc[0, 'batter_team_id'] == 'T2'

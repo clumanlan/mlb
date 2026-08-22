@@ -268,7 +268,7 @@ def create_pa_outcome(pbp, batter_boxscore, game_info, schedule):
     game_info = game_info[["gamepk", "game_season", "weather_condition", "weather_temp"]].drop_duplicates("gamepk")
     schedule = schedule[["gamepk", "game_date", "venue_id"]].drop_duplicates("gamepk")
 
-    pa_outcome = pbp[['gamepk', 'batter_team_name', 'play_id', 'pitcher_id', 'pitcher_name', 'batter_id', 'batter_name', 'is_hit', 'pitcher_throw_hand', 'batter_bat_side', 'pitcher_role', 'pitcher_team_id', 'starting_pitcher_id', 'batter_pa_number']].drop_duplicates().reset_index(drop=True)
+    pa_outcome = pbp[['gamepk', 'batter_team_name', 'batter_team_id', 'play_id', 'pitcher_id', 'pitcher_name', 'batter_id', 'batter_name', 'is_hit', 'pitcher_throw_hand', 'batter_bat_side', 'pitcher_role', 'pitcher_team_id', 'starting_pitcher_id', 'batter_pa_number']].drop_duplicates().reset_index(drop=True)
 
     pa_outcome = pa_outcome.merge(
         schedule,

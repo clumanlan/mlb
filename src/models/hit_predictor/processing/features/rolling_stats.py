@@ -13,16 +13,23 @@ from .season_stats import _prefix_stat_cols, _pitcher_role_lookup
 # sample sizes.
 
 
-def _rolling_sum(df: pd.DataFrame, entity_col: str, cols: list[str], window: str | int) -> pd.DataFrame:
+def _rolling_sum(
+    df: pd.DataFrame, entity_col: str, cols: list[str], window: str | int, sort_col: str = 'game_date'
+) -> pd.DataFrame:
     """Roll `cols` per `entity_col`, excluding the current game's own row.
 
     window='season': expanding sum within (entity_col, game_season) — resets at season
         boundaries.
     window=<int>: trailing N-game sum per entity_col — carries across season boundaries,
         since a fixed-length recent-form window has no reason to reset on Opening Day.
+
+    sort_col: column to order rows by before rolling — defaults to game_date, which
+        has no time component and can't reliably order two rows sharing the same date
+        (e.g. both games of a doubleheader). Pass 'game_datetime' when that matters
+        (see test_rolling_sum_sort_col_orders_same_date_rows_by_finer_grained_column).
     """
 
-    df = df.sort_values([entity_col, 'game_date']).reset_index(drop=True)
+    df = df.sort_values([entity_col, sort_col]).reset_index(drop=True)
 
     if window == 'season':
         rolled = df.groupby([entity_col, 'game_season'])[cols].transform(
@@ -36,11 +43,14 @@ def _rolling_sum(df: pd.DataFrame, entity_col: str, cols: list[str], window: str
     return df.assign(**{c: rolled[c] for c in cols})
 
 
-def _rolling_max(df: pd.DataFrame, entity_col: str, cols: list[str], window: str | int) -> pd.DataFrame:
+def _rolling_max(
+    df: pd.DataFrame, entity_col: str, cols: list[str], window: str | int, sort_col: str = 'game_date'
+) -> pd.DataFrame:
     """Same shape as _rolling_sum but takes a rolling max — exact for max-type
-    stats, since max-of-per-game-maxes equals the true max across the window."""
+    stats, since max-of-per-game-maxes equals the true max across the window.
+    See _rolling_sum's sort_col docstring."""
 
-    df = df.sort_values([entity_col, 'game_date']).reset_index(drop=True)
+    df = df.sort_values([entity_col, sort_col]).reset_index(drop=True)
 
     if window == 'season':
         rolled = df.groupby([entity_col, 'game_season'])[cols].transform(

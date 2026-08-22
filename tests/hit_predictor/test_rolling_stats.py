@@ -89,6 +89,34 @@ def test_rolling_sum_season_mode_resets_at_season_boundary():
     assert pd.isna(row_2024['h'].iloc[0])
 
 
+def test_rolling_sum_sort_col_orders_same_date_rows_by_finer_grained_column():
+    """game_date has no time component — two rows sharing the same date
+    (e.g. both games of a doubleheader) can't be reliably ordered by it
+    alone. sort_col lets a caller pass a finer-grained column (e.g.
+    game_datetime) so the earlier game's rolled value doesn't leak the
+    later game's own-day result. Default behavior (sort_col unset) is
+    unchanged — this only matters when a caller opts in."""
+
+    df = pd.DataFrame([
+        _row(game_date='2023-04-01', game_datetime=pd.Timestamp('2023-04-01 19:00'), h=1),
+        # Doubleheader day: two rows sharing the same game_date, deliberately
+        # inserted in reverse chronological order (game 2's timestamp first)
+        # to prove sort_col, not row order, controls the result.
+        _row(game_date='2023-04-13', game_datetime=pd.Timestamp('2023-04-13 22:00'), h=100),  # game 2
+        _row(game_date='2023-04-13', game_datetime=pd.Timestamp('2023-04-13 16:00'), h=10),   # game 1
+    ])
+
+    result = _rolling_sum(df, entity_col='personId', cols=['h'], window=10, sort_col='game_datetime')
+
+    game1 = result.loc[result['game_datetime'] == pd.Timestamp('2023-04-13 16:00')]
+    game2 = result.loc[result['game_datetime'] == pd.Timestamp('2023-04-13 22:00')]
+    # game 1 must roll forward only the prior day's h=1 — not game 2's h=100,
+    # which hasn't happened yet relative to game 1 despite sharing a date
+    assert game1['h'].iloc[0] == 1
+    # game 2 (later that same day) correctly picks up game 1's h=10 too
+    assert game2['h'].iloc[0] == 1 + 10
+
+
 def test_rolling_sum_short_window_carries_across_season_boundary():
     """Unlike season-to-date, a fixed N-game window has no reason to reset
     at a season boundary — a player's early-April window should still

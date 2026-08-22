@@ -234,6 +234,75 @@ def build_league_avg_start_depth(pitcher_start_depth_stats):
     return df[['game_season', 'league_last_season_avg_batters_faced_per_start']]
 
 
+# --------------------------- PITCHER START IP (starter innings estimate, Epic E) --------------------------- #
+# "How many innings does this starter typically go per start" — same rationale/fallback-chain
+# role as start depth (batters faced) above, but built directly from pitcher_boxscore's own ip
+# column (already tracked per start) rather than counting pbp PAs. Feeds the pre-game
+# expected-innings estimate used to expand a game into sp/bullpen rows (game_context.py).
+
+def _create_pitcher_start_ip_stats(pitcher_boxscore: pd.DataFrame, pbp: pd.DataFrame) -> pd.DataFrame:
+
+    role_lookup = _pitcher_role_lookup(pbp)[['gamepk', 'pitcher_id', 'pitcher_role']].rename(
+        columns={'pitcher_id': 'personId'}
+    )
+    tagged = pitcher_boxscore.assign(
+        personId=lambda x: x['personId'].astype(str), gamepk=lambda x: x['gamepk'].astype(str)
+    ).merge(
+        role_lookup.assign(
+            personId=lambda x: x['personId'].astype(str), gamepk=lambda x: x['gamepk'].astype(str)
+        ),
+        on=['gamepk', 'personId'],
+        how='left',
+    )
+
+    sp_box = tagged[tagged['pitcher_role'] == 'sp']
+
+    df = (
+        sp_box
+        .groupby(['personId', 'game_season'])
+        .agg(
+            avg_ip_per_start=('ip', 'mean'),
+            std_ip_per_start=('ip', 'std'),
+            n_starts=('ip', 'count'),
+        )
+        .reset_index()
+    )
+
+    return _prefix_stat_cols(df, prefix='pitcher_season_start_ip_', key_cols=['personId', 'game_season'])
+
+
+def build_pitcher_start_ip_stats(pitcher_boxscore: pd.DataFrame, pbp: pd.DataFrame) -> pd.DataFrame:
+
+    return _shift_to_last_season(_create_pitcher_start_ip_stats(pitcher_boxscore, pbp))
+
+
+def build_league_avg_start_ip(pitcher_start_ip_stats: pd.DataFrame) -> pd.DataFrame:
+    """League-wide average IP/start last season, weighted by each pitcher's own
+    start count — same fallback-for-thin-samples rationale as build_league_avg_start_depth.
+    Built from the already-shifted per-pitcher table, so game_season is already at the
+    'join onto this season' grain."""
+
+    weighted = pitcher_start_ip_stats.assign(
+        _weighted_sum=lambda x: (
+            x['pitcher_last_season_start_ip_avg_ip_per_start']
+            * x['pitcher_last_season_start_ip_n_starts']
+        )
+    )
+
+    df = (
+        weighted
+        .groupby('game_season')
+        .agg(
+            _weighted_sum=('_weighted_sum', 'sum'),
+            _total_starts=('pitcher_last_season_start_ip_n_starts', 'sum'),
+        )
+        .reset_index()
+    )
+    df['league_last_season_avg_ip_per_start'] = df['_weighted_sum'] / df['_total_starts']
+
+    return df[['game_season', 'league_last_season_avg_ip_per_start']]
+
+
 # --------------------------- PITCHER PBP SEASON STATS --------------------------- #
 # See FEATURE_GLOSSARY.md for stat definitions/rationale. Categories below:
 # - stuff: physical properties of a pitch

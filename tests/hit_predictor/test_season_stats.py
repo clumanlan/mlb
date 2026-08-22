@@ -14,10 +14,13 @@ from models.hit_predictor.processing.features.season_stats import (
     _create_pitcher_last_inning_stats,
     _create_pitcher_pa_outcome_stats,
     _create_pitcher_start_depth_stats,
+    _create_pitcher_start_ip_stats,
     _pivot_by_hand,
     _shift_to_last_season,
     build_batter_stats,
     build_league_avg_start_depth,
+    build_league_avg_start_ip,
+    build_pitcher_start_ip_stats,
     build_league_handedness_stats,
     build_league_times_through_order_stats,
     build_pbp_batter_feats,
@@ -1199,3 +1202,71 @@ def test_build_league_avg_start_depth_weights_by_each_pitchers_start_count():
     row = result[result['game_season'] == 2024].iloc[0]
 
     assert row['league_last_season_avg_batters_faced_per_start'] == pytest.approx(21.0)
+
+
+# --------------------------- PITCHER START IP (starter innings estimate, Epic E) --------------------------- #
+# "How many innings does this starter typically go per start" — same rationale/fallback-chain
+# role as start depth (batters faced) above, but built directly from pitcher_boxscore's own ip
+# column (already tracked per start) rather than counting pbp PAs. Feeds the pre-game
+# expected-innings estimate used to expand a game into sp/bullpen rows (game_context.py).
+
+def _make_start_ip_pitcher_boxscore():
+    return pd.DataFrame([
+        {'personId': '10', 'gamepk': 'g1', 'game_season': 2023, 'ip': 6.0},
+        {'personId': '10', 'gamepk': 'g2', 'game_season': 2023, 'ip': 5.0},
+        # A bullpen appearance elsewhere — must be excluded from the start-ip average
+        {'personId': '10', 'gamepk': 'g3', 'game_season': 2023, 'ip': 1.0},
+    ])
+
+
+def _make_start_ip_pbp():
+    return pd.DataFrame([
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g1', 'pitcher_role': 'sp'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g2', 'pitcher_role': 'sp'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g3', 'pitcher_role': 'bullpen'},
+    ])
+
+
+def test_create_pitcher_start_ip_stats_averages_ip_across_starts_only():
+    """Hand-computed: two 'sp' starts of 6.0 and 5.0 IP -> avg = 5.5, n_starts=2.
+    The bullpen appearance (1.0 IP) must not pull the average down or inflate
+    n_starts — a reliever outing isn't a 'start'."""
+
+    result = _create_pitcher_start_ip_stats(_make_start_ip_pitcher_boxscore(), _make_start_ip_pbp())
+    row = result[(result['personId'] == '10') & (result['game_season'] == 2023)].iloc[0]
+
+    assert row['pitcher_season_start_ip_avg_ip_per_start'] == pytest.approx(5.5)
+    assert row['pitcher_season_start_ip_n_starts'] == 2
+
+
+def test_build_pitcher_start_ip_stats_shifts_game_season_by_one():
+    """Same point-in-time-safe convention as build_pitcher_start_depth_stats:
+    2023 data can only be joined onto 2024 games."""
+
+    result = build_pitcher_start_ip_stats(_make_start_ip_pitcher_boxscore(), _make_start_ip_pbp())
+    row = result[result['personId'] == '10'].iloc[0]
+
+    assert row['game_season'] == 2024
+    assert 'pitcher_last_season_start_ip_avg_ip_per_start' in result.columns
+    assert 'pitcher_season_start_ip_avg_ip_per_start' not in result.columns
+    assert row['pitcher_last_season_start_ip_avg_ip_per_start'] == pytest.approx(5.5)
+
+
+def test_build_league_avg_start_ip_weights_by_each_pitchers_start_count():
+    """Same weighting rationale as build_league_avg_start_depth: a workhorse's
+    average should count for more than a two-start sample. Weighted avg =
+    (6.0*10 + 3.0*2) / 12 = 5.5, not the plain-mean (6.0+3.0)/2 = 4.5."""
+
+    pitcher_start_ip_stats = pd.DataFrame([
+        {'pitcher_id': 'A', 'game_season': 2024,
+         'pitcher_last_season_start_ip_avg_ip_per_start': 6.0,
+         'pitcher_last_season_start_ip_n_starts': 10},
+        {'pitcher_id': 'B', 'game_season': 2024,
+         'pitcher_last_season_start_ip_avg_ip_per_start': 3.0,
+         'pitcher_last_season_start_ip_n_starts': 2},
+    ])
+
+    result = build_league_avg_start_ip(pitcher_start_ip_stats)
+    row = result[result['game_season'] == 2024].iloc[0]
+
+    assert row['league_last_season_avg_ip_per_start'] == pytest.approx(5.5)
