@@ -1,5 +1,15 @@
 # Baseline Results — batter_hit_predictor
 
+> **Superseded 2026-08-22.** Written before the reliability/resolution/game-grain
+> evaluation framework existed (BENCHMARKS.md §2) — everything below is PA-grain
+> log_loss/Brier only, computed by hand in `run_baseline.py` rather than the
+> shared `utils/eval.py` harness every other run in this repo uses. Use
+> `baseline/statistical/baseline_results.md` instead: a single, cleaner
+> empirical-Bayes formula (vs. this file's 3-way hand-weighted blend),
+> evaluated at both PA and game grain with a proper reliability/resolution
+> verdict against naive. Kept here for history, not as a current reference
+> point.
+
 **Date:** 2026-07-30  
 **Task:** Binary classification (per plate appearance)  
 **Target:** Did the batter record a hit in this PA?  

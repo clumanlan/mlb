@@ -5,6 +5,8 @@ import pytest
 from models.hit_predictor.utils.eval import (
     aggregate_pa_predictions_to_game,
     run_pa_vs_game_grain_check,
+    save_predictions,
+    summarize_verdict,
 )
 
 
@@ -159,6 +161,48 @@ def test_n_pa_counts_plate_appearances_in_the_game():
     assert result.iloc[0]["n_pa"] == 3
 
 
+def test_save_predictions_writes_both_parquet_files_with_default_names(tmp_path):
+    """predictions_pa is keyed on (gamepk, play_id) rather than
+    (batter_id, gamepk) like run_pa_vs_game_grain_check's internal
+    pa_results — play_id is what makes a PA-grain row unique, so callers
+    that need per-PA predictions (not just per-batter-game) build this
+    frame themselves and hand it here as-is; this function just persists
+    whatever two frames it's given."""
+
+    pa_df = pd.DataFrame({
+        "gamepk": [100, 100],
+        "play_id": [1, 2],
+        "batter_id": [1, 1],
+        "is_hit": [0, 1],
+        "pred_prob": [0.10, 0.60],
+    })
+    game_df = pd.DataFrame({
+        "batter_id": [1],
+        "gamepk": [100],
+        "game_pred_prob": [0.46],
+        "game_is_hit": [1],
+    })
+
+    pa_path, game_path = save_predictions(pa_df, game_df, tmp_path)
+
+    assert pa_path == tmp_path / "predictions_pa.parquet"
+    assert game_path == tmp_path / "predictions_game.parquet"
+    assert pa_path.exists()
+    assert game_path.exists()
+    pd.testing.assert_frame_equal(pd.read_parquet(pa_path), pa_df)
+    pd.testing.assert_frame_equal(pd.read_parquet(game_path), game_df)
+
+
+def test_save_predictions_creates_output_dir_if_missing(tmp_path):
+    pa_df = pd.DataFrame({"gamepk": [1], "play_id": [1], "pred_prob": [0.1]})
+    game_df = pd.DataFrame({"gamepk": [1], "game_pred_prob": [0.1]})
+
+    pa_path, game_path = save_predictions(pa_df, game_df, tmp_path / "nested" / "dir")
+
+    assert pa_path.exists()
+    assert game_path.exists()
+
+
 def test_custom_column_names_are_respected():
     df = _df([
         {"batter": 1, "game": 100, "hit": 1, "p": 0.4},
@@ -168,3 +212,72 @@ def test_custom_column_names_are_respected():
     )
     assert result.iloc[0]["game_pred_prob"] == pytest.approx(0.4)
     assert result.iloc[0]["game_is_hit"] == 1
+
+
+# ── summarize_verdict ────────────────────────────────────────────────────────
+# Codifies BENCHMARKS.md §2's decision rule so "is this a real improvement"
+# is answered by running a function, not by eyeballing two numbers across two
+# separate evaluate_hit_predictor() printouts. See the "Reliability &
+# Resolution" write-up (BENCHMARKS.md footer) for the Model A/B/C reasoning
+# behind why both checks are required together.
+
+def test_real_improvement_when_resolution_up_and_reliability_flat_or_better():
+    # Resolution improves (more differentiation) and reliability doesn't get
+    # worse (still honest) -- the clean win case (Model B vs Model A).
+    baseline = {"reliability": 0.0013, "resolution": 0.0001}
+    new = {"reliability": 0.0005, "resolution": 0.0159}
+
+    result = summarize_verdict(baseline, new)
+
+    assert result["trustworthy"] is True
+    assert result["differentiated"] is True
+    assert result["verdict"] == "real_improvement"
+
+
+def test_overconfidence_risk_when_resolution_up_but_reliability_worse():
+    # Same resolution gain, but reliability got worse -- the Model C trap:
+    # more spread in predictions, but the spread itself is dishonest.
+    baseline = {"reliability": 0.0005, "resolution": 0.0001}
+    new = {"reliability": 0.0137, "resolution": 0.0037}
+
+    result = summarize_verdict(baseline, new)
+
+    assert result["trustworthy"] is False
+    assert result["differentiated"] is True
+    assert result["verdict"] == "overconfidence_risk"
+
+
+def test_calibration_only_when_reliability_improves_but_resolution_flat():
+    # Probabilities got more honest, but the model isn't differentiating any
+    # better than before -- narrower win, not "no improvement."
+    baseline = {"reliability": 0.0030, "resolution": 0.0135}
+    new = {"reliability": 0.0015, "resolution": 0.0135}
+
+    result = summarize_verdict(baseline, new)
+
+    assert result["trustworthy"] is True
+    assert result["differentiated"] is False
+    assert result["verdict"] == "calibration_only"
+
+
+def test_no_improvement_when_both_flat_or_worse():
+    # Naive-vs-model at game grain per BENCHMARKS.md §1: model's resolution
+    # is lower than naive's, and reliability isn't better either.
+    baseline = {"reliability": 0.0030, "resolution": 0.0182}  # naive
+    new = {"reliability": 0.0030, "resolution": 0.0138}       # v5 model
+
+    result = summarize_verdict(baseline, new)
+
+    assert result["trustworthy"] is True
+    assert result["differentiated"] is False
+    assert result["verdict"] == "no_improvement"
+
+
+def test_returns_raw_deltas():
+    baseline = {"reliability": 0.0030, "resolution": 0.0182}
+    new = {"reliability": 0.0015, "resolution": 0.0159}
+
+    result = summarize_verdict(baseline, new)
+
+    assert result["reliability_delta"] == pytest.approx(0.0015 - 0.0030)
+    assert result["resolution_delta"] == pytest.approx(0.0159 - 0.0182)

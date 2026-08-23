@@ -9,8 +9,20 @@ time_based_split: true
 test_season: 2025   # held-out — never evaluated during development; final eval only in train.py
 val_season: 2024    # iterate against this during development
 # train = all train_seasons except val_season and test_season
-metric: log_loss
-secondary_metric: brier_score
+# Evaluation framework — see BENCHMARKS.md §2 for the full reasoning. These
+# fields are documentation of that convention (not read by any script — every
+# run computes the full metrics dict via utils/eval.py::evaluate_hit_predictor
+# regardless), kept here so anyone skimming config.yaml sees the real decision
+# rule instead of a stale one.
+#   decision_metrics: reliability + resolution together, at game grain
+#     (utils/eval.py::summarize_verdict) — "is the number honest" +
+#     "does it actually differentiate," per the naive-base-rate-predictor
+#     trap (perfectly calibrated, reliability=0, but useless, resolution=0).
+#   diagnostic_metrics: log_loss, brier_score, roc_auc, pr_auc, ece — useful
+#     for tracking overall trend, but none of them alone tells you whether an
+#     experiment is a real improvement (see BENCHMARKS.md's Model B vs C).
+decision_metrics: [reliability, resolution]
+diagnostic_metrics: [log_loss, brier_score, roc_auc, pr_auc, ece]
 model_name: batter_hit_predictor
 
 # Seasons used to build the PA-level training dataset (excludes 2020/2021 covid)

@@ -14,6 +14,8 @@ just needs to hand this file a dict shaped like:
     }
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -132,6 +134,89 @@ def run_pa_vs_game_grain_check(val_df, y_val, proba, group_cols=("batter_id", "g
             print(f"  {key:12s}  PA={pa_metrics[key]:.4f}   GAME={game_metrics[key]:.4f}")
 
     return pa_metrics, game_metrics, game_results
+
+
+def summarize_verdict(baseline_metrics: dict, new_metrics: dict) -> dict:
+    """
+    Codifies BENCHMARKS.md §2's decision rule: is a new run's metrics dict
+    (e.g. game_metrics from run_pa_vs_game_grain_check) actually better than
+    a baseline's, given both reliability (can the number be trusted) and
+    resolution (does it differentiate at all)? Neither metric answers that
+    question alone — a model that predicts the base rate for every row is
+    perfectly calibrated (reliability 0) and useless (resolution 0), and a
+    model can raise resolution while getting less honest at the same time
+    (see the "Reliability & Resolution" write-up's Model B vs Model C).
+
+    Parameters
+    ----------
+    baseline_metrics, new_metrics : dict
+        Must each have 'reliability' and 'resolution' keys (e.g. the dicts
+        returned by evaluate_hit_predictor / run_pa_vs_game_grain_check).
+
+    Returns
+    -------
+    dict with keys:
+      trustworthy : bool — reliability flat-or-better than baseline
+        (lower reliability = more honest, so this is new <= baseline)
+      differentiated : bool — resolution strictly better than baseline
+        (higher resolution = more real spread, so this is new > baseline)
+      reliability_delta, resolution_delta : float (new - baseline)
+      verdict : one of
+        "real_improvement"    — differentiated and trustworthy
+        "overconfidence_risk" — differentiated but NOT trustworthy (the
+                                 Model C trap: more spread, but dishonest)
+        "calibration_only"    — trustworthy but not differentiated (more
+                                 honest, no new signal)
+        "no_improvement"      — neither
+    """
+    reliability_delta = new_metrics["reliability"] - baseline_metrics["reliability"]
+    resolution_delta = new_metrics["resolution"] - baseline_metrics["resolution"]
+
+    trustworthy = reliability_delta <= 0
+    differentiated = resolution_delta > 0
+
+    if differentiated and trustworthy:
+        verdict = "real_improvement"
+    elif differentiated and not trustworthy:
+        verdict = "overconfidence_risk"
+    elif reliability_delta < 0:
+        verdict = "calibration_only"
+    else:
+        verdict = "no_improvement"
+
+    return {
+        "trustworthy": trustworthy,
+        "differentiated": differentiated,
+        "reliability_delta": reliability_delta,
+        "resolution_delta": resolution_delta,
+        "verdict": verdict,
+    }
+
+
+def save_predictions(pa_df, game_df, output_dir,
+                      pa_filename="predictions_pa.parquet",
+                      game_filename="predictions_game.parquet"):
+    """Persist PA-grain and game-grain prediction DataFrames to parquet.
+
+    Caller-agnostic about where these frames came from — run_pa_vs_game_
+    grain_check's own pa_results is keyed on group_cols (batter_id/gamepk
+    by default) and doesn't carry play_id, so a caller that wants PA-grain
+    predictions keyed on (gamepk, play_id) builds that frame itself and
+    hands it here alongside the game_results this module already returns.
+
+    Stays MLflow-agnostic like the rest of this module (see mlflow_logging.
+    py's docstring) — returns the written paths so the caller decides
+    whether/how to log them as artifacts.
+
+    Returns (pa_path, game_path) as Path objects.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pa_path = output_dir / pa_filename
+    game_path = output_dir / game_filename
+    pa_df.to_parquet(pa_path, index=False)
+    game_df.to_parquet(game_path, index=False)
+    return pa_path, game_path
 
 
 def _make_bucket_row(label, y_true, y_prob, min_n):
