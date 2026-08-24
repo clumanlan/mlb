@@ -10,6 +10,18 @@ All new code in this project follows Test-Driven Development. Before planning or
 
 ---
 
+## Documentation Conventions
+
+No emoji anywhere in this repo — markdown docs, code comments, commit messages, or CLI output strings. Mark status with plain text instead:
+
+- Pipeline/architecture status (layer diagrams, integration tables): `[done]`, `[in progress]`, `[not started]`
+- Have/partial/gap-style reference columns (e.g. `FEATURE_GLOSSARY.md`): bold text tags — `**have it**`, `**partial**`, `**gap**`
+- Inline "this shipped" callouts: bold the status word itself (`**Built, positive.**`, `**Confirmed.**`) rather than prefixing an icon
+
+Plain text stays legible in diffs, terminals, and screen readers, and renders consistently everywhere an icon might not.
+
+---
+
 ## Commands
 
 ```bash
@@ -45,13 +57,13 @@ make zip-odds-fetch
 This is an end-to-end MLB ML system built for DraftKings prop betting. The pipeline runs daily and flows through these layers:
 
 ```
-Layer 1 — Raw Ingestion       ✅  fetch from MLB Stats API → S3 (raw_data/)
-Layer 2 — Validation          ✅  quality gate before downstream runs
-Layer 3 — Feature Engineering ⏳  rolling window features → S3 (features/offline/)
-Layer 4 — Feature Store       ⬜  Feast (offline: S3/Athena, online: DynamoDB)
-Layer 5 — Model Training      ⏳  XGBoost baseline → attention model (see "Model Layer" below)
-Layer 6 — Prediction Pipeline ⬜  daily batch inference, lineup-aware
-Layer 7 — MLOps               ⬜  MLflow, Evidently AI, CloudWatch
+Layer 1 — Raw Ingestion       [done]         fetch from MLB Stats API → S3 (raw_data/)
+Layer 2 — Validation          [done]         quality gate before downstream runs
+Layer 3 — Feature Engineering [in progress]  rolling window features → S3 (features/offline/)
+Layer 4 — Feature Store       [not started]  Feast (offline: S3/Athena, online: DynamoDB)
+Layer 5 — Model Training      [in progress]  XGBoost baseline → attention model (see "Model Layer" below)
+Layer 6 — Prediction Pipeline [not started]  daily batch inference, lineup-aware
+Layer 7 — MLOps               [not started]  MLflow, Evidently AI, CloudWatch
 ```
 
 ---
@@ -105,10 +117,10 @@ Every Lambda must write a status JSON to S3 at the end of execution (success or 
 
 | Lambda | `games_processed` keys | Status writer integrated? |
 |---|---|---|
-| `daily_mlb_fetch` | `schedule`, `game_info`, `batter_boxscore`, `pitcher_boxscore`, `playbyplay` | ✅ |
-| `daily_process_data` | `schedule`, `batter_prepared`, `pitcher_prepared`, `playbyplay_prepared` | ✅ |
-| `daily_odds_fetch` | `team_odds`, `player_props` | ✅ |
-| `daily_feature_create` | — | ⬜ not yet integrated |
+| `daily_mlb_fetch` | `schedule`, `game_info`, `batter_boxscore`, `pitcher_boxscore`, `playbyplay` | Yes |
+| `daily_process_data` | `schedule`, `batter_prepared`, `pitcher_prepared`, `playbyplay_prepared` | Yes |
+| `daily_odds_fetch` | `team_odds`, `player_props` | Yes |
+| `daily_feature_create` | — | Not yet integrated |
 
 The goal is to verify that all games were captured at each step — a drop from 15 to 13 in `batter_boxscore` signals a data gap.
 
@@ -213,7 +225,7 @@ aws lambda invoke \
 
 ## Model Layer — `src/models/`
 
-The end goal is a shared feature store feeding **multiple models** (batter hit/no-hit, pitcher K/no-K, and others as they're built). `hit_predictor` (`src/models/hit_predictor/`) is the first model and is currently how that direction gets validated — it runs its own bespoke processing pipeline rather than consuming from the Layer 4 Feast store above, because the feature engineering it needs (PA-grain, point-in-time-safe, extensively feature-engineered) is still being worked out model-side before it's worth generalizing into the shared store. Expect this pipeline's proven patterns (rolling windows, point-in-time shifting, role-aware pitcher splits) to migrate toward Layer 4 once a second model needs the same features.
+The end goal is a shared feature store feeding **multiple models** (batter hit/no-hit, pitcher K/no-K, and others as they're built). `hit_predictor` (`src/models/hit_predictor/`) was the first model and is still where the batter-side hit-probability problem is worked on. `src/models/k_predictor/` (pitcher strikeout probability) and `src/models/n_pa_predictor/` (batter plate-appearance count / `low_pa` classifier) are newer sibling models — see `README.md`'s sub-problem menu and `ROADMAP.md`'s Mid-term section for current status of each. Both compose `hit_predictor`'s existing target-agnostic feature-building machinery (season/rolling stats, role gating) via their own thin `processing/pipeline.py` + `processing/schema.py`, rather than duplicating it. Each still runs its own bespoke processing pipeline rather than consuming from the Layer 4 Feast store above, because the feature engineering it needs (PA-grain, point-in-time-safe, extensively feature-engineered) is still being worked out model-side before it's worth generalizing into the shared store. Expect this pipeline's proven patterns (rolling windows, point-in-time shifting, role-aware pitcher splits) to migrate toward Layer 4 now that a second model (`k_predictor`) exists and needs the same features — see `ROADMAP.md`'s "Feature-store convergence" item.
 
 **Structure:**
 - `processing/pipeline.py` — assembles the PA-outcome training grain from raw pbp/boxscore/schedule/game_info (`create_pa_outcome`)

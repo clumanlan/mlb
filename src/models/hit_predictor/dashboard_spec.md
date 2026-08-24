@@ -46,8 +46,8 @@ project/
 │       │   ├── __init__.py
 │       │   ├── metrics.py        # per_row_loss, slice_log_loss
 │       │   ├── slicing.py        # single + interaction slice generation
-│       │   ├── contribution.py   # ★ TESTED ★ contribution math + ranking
-│       │   ├── bootstrap.py      # ★ TESTED ★ bootstrap CI with fixed seed
+│       │   ├── contribution.py   # TESTED — contribution math + ranking
+│       │   ├── bootstrap.py      # TESTED — bootstrap CI with fixed seed
 │       │   ├── binning.py        # numeric/categorical binning
 │       │   ├── calibration.py    # reliability bins
 │       │   └── missing.py        # null counts per column

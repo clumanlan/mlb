@@ -53,7 +53,7 @@ All targets live in the root `mlb/Makefile` and are run from `mlb/`.
 
 ## What's built
 
-### Stage 1 — Data Pipeline Status ✅
+### Stage 1 — Data Pipeline Status (done)
 
 Three cards showing whether each Lambda ran successfully and on time:
 
@@ -65,7 +65,7 @@ Three cards showing whether each Lambda ran successfully and on time:
 
 Each card shows: run date · duration · games processed per step · any error. A summary bar below shows `2/3 ok · 1 stale`.
 
-### Stage 2 — Today's Slate ✅
+### Stage 2 — Today's Slate (done)
 
 Game table sorted by CT game time. Columns:
 
@@ -74,11 +74,11 @@ Game table sorted by CT game time. Columns:
 | Time (CT) | Schedule | UTC converted to Central Time |
 | Matchup | Schedule | Away @ Home |
 | Lineup | `raw_data/lineups/states/` | CONFIRMED / PENDING / SKIPPED |
-| Odds | `raw_data/odds/team_odds/` | ✓ if present, — if missing |
+| Odds | `raw_data/odds/team_odds/` | shown if present, dash if missing |
 | Prediction | — | Placeholder for Stage 3 |
 
-### Stage 3 — Model Predictions ⬜ not yet built
-### Stage 4 — Bet Recommendations ⬜ not yet built
+### Stage 3 — Model Predictions (not yet built)
+### Stage 4 — Bet Recommendations (not yet built)
 
 ---
 
