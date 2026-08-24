@@ -20,11 +20,24 @@ def build_pbp_features_strikeout(pbp, schedule, player_info):
 def create_pa_outcome_strikeout(pbp, batter_boxscore, game_info, schedule):
     """Mirrors hit_predictor's create_pa_outcome, swapping is_hit for
     is_strikeout as the PA-grain label. pbp must already carry is_strikeout
-    (via build_pbp_features_strikeout)."""
+    (via build_pbp_features_strikeout).
+
+    Scoped to REALIZED pitcher_role=='sp' only — a deliberate divergence
+    from hit_predictor's own create_pa_outcome, which pools both sp and
+    bullpen PAs. K-prop's real-world target is a named starting pitcher's
+    strikeout total; a bullpen PA's actual pitcher isn't identifiable
+    pre-game (pooled by team, see expected_role.py) and isn't the subject of
+    that prop at all. Same convention as season_stats.py's
+    _create_pitcher_start_depth_stats sp_pbp filter — REALIZED role, not
+    expected_pitcher_role, since this defines "was the true pitcher a
+    starter," not a pre-game-knowable gate (that's what expected_pitcher_role,
+    assigned downstream, is for)."""
 
     batting_order = _create_batting_order(batter_boxscore)
     game_info = game_info[["gamepk", "game_season", "weather_condition", "weather_temp"]].drop_duplicates("gamepk")
     schedule = schedule[["gamepk", "game_date", "venue_id"]].drop_duplicates("gamepk")
+
+    pbp = pbp[pbp['pitcher_role'] == 'sp']
 
     pa_outcome = pbp[[
         'gamepk', 'batter_team_name', 'batter_team_id', 'play_id', 'pitcher_id', 'pitcher_name',

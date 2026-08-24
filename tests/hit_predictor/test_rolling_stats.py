@@ -368,6 +368,34 @@ def test_build_pitcher_rolling_stats_divide_by_zero_guarded():
     assert pd.isna(result['pitcher_roll_last10g_whip'].iloc[0])
 
 
+def test_build_pitcher_rolling_stats_includes_games_n_count():
+    """games_n: rolling count of games pitched so far this window — a
+    workload sample-size signal, and the shrinkage-weight input for
+    k_predictor's rolling-stats-shrunk-to-last-season blend."""
+
+    df = pd.DataFrame([
+        _pitcher_box_row(gamepk='g1', game_date='2023-04-01'),
+        _pitcher_box_row(gamepk='g2', game_date='2023-04-02'),
+        _pitcher_box_row(gamepk='g3', game_date='2023-04-03'),
+    ])
+
+    result = build_pitcher_rolling_stats(df, window=10)
+
+    row3 = result.loc[result['gamepk'] == 'g3']
+    assert row3['pitcher_roll_last10g_games_n'].iloc[0] == 2
+
+
+def test_build_pitcher_rolling_stats_games_n_zero_for_first_game():
+    """A real, meaningful 0 for a pitcher's first game — not NaN, same
+    convention as build_pitcher_start_ip_this_season's starts_n."""
+
+    df = pd.DataFrame([_pitcher_box_row(gamepk='g1', game_date='2023-04-01')])
+
+    result = build_pitcher_rolling_stats(df, window=10)
+
+    assert result['pitcher_roll_last10g_games_n'].iloc[0] == 0
+
+
 def _pitch_row(pitcher_id='1', gamepk='g1', game_date='2023-04-01', game_season=2023,
                 play_id=1, pitch_number=1, **overrides):
     row = {

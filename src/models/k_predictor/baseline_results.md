@@ -11,9 +11,9 @@
 
 | Split | Seasons | Rows | K rate |
 |-------|---------|------|--------|
-| Train | [2018, 2019, 2022, 2023] | 675,186 | 0.224 |
-| Val   | 2024 | 173,067 | 0.224 |
-| Test  | 2025 | 172,627 | locked — not evaluated here |
+| Train | [2018, 2019, 2022, 2023] | 411,861 | 0.218 |
+| Val   | 2024 | 105,265 | 0.219 |
+| Test  | 2025 | 104,427 | locked — not evaluated here |
 
 ## Results (evaluated on val)
 
@@ -23,14 +23,14 @@ model must clear is the BETTER of the two.
 
 | Model | PR-AUC | Δ vs best naive | ROC-AUC |
 |-------|--------|------------------|---------|
-| Naive (most frequent) | 0.2237 | — | 0.5000 |
-| Naive (per-role K rate) | 0.2257 | — | 0.5055 |
-| Logistic regression | 0.2698 | +0.0441 | 0.5758 |
-| XGBoost | 0.2626 | +0.0369 | 0.5667 |
+| Naive (most frequent) | 0.2190 | — | 0.5000 |
+| Naive (per-role K rate) | 0.2207 | — | 0.5048 |
+| Logistic regression | 0.2702 | +0.0495 | 0.5821 |
+| XGBoost | 0.2603 | +0.0396 | 0.5698 |
 
 ## Interpretation
 
-**Logistic regression** beats the best naive floor (**Naive (per-role K rate)**, PR-AUC 0.2257) with PR-AUC 0.2698 — worth carrying forward into a real experiment.
+**Logistic regression** beats the best naive floor (**Naive (per-role K rate)**, PR-AUC 0.2207) with PR-AUC 0.2702 — worth carrying forward into a real experiment.
 
 ## Setup
 

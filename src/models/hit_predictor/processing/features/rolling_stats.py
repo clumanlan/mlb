@@ -150,9 +150,16 @@ def build_pitcher_rolling_stats(pitcher_boxscore: pd.DataFrame, window: str | in
 
     stat_cols = ['h', 'r', 'er', 'bb', 'hr', 'k', 'p', 's', 'ip']
     key_cols = _box_key_cols(entity_col)
-    df = pitcher_boxscore[key_cols + stat_cols]
+    df = pitcher_boxscore[key_cols + stat_cols].copy()
+    # games_n: rolling count of games pitched so far — a real, meaningful 0
+    # for a season/career opener (not NaN), same convention as
+    # game_context.py's build_pitcher_start_ip_this_season's starts_n.
+    # Workload sample-size signal in its own right, and the shrinkage-weight
+    # input for k_predictor's rolling-stats-shrunk-to-last-season blend.
+    df['games_n'] = 1
 
-    df = _rolling_sum(df, entity_col=entity_col, cols=stat_cols, window=window)
+    df = _rolling_sum(df, entity_col=entity_col, cols=stat_cols + ['games_n'], window=window)
+    df['games_n'] = df['games_n'].fillna(0)
 
     df = df.assign(
         whip = lambda x: (x['bb'] + x['h']) / x['ip'].replace(0, np.nan),

@@ -119,6 +119,25 @@ def test_create_pa_outcome_strikeout_excludes_non_starters():
     assert list(result['batter_id']) == ['1']
 
 
+def test_create_pa_outcome_strikeout_excludes_bullpen_role_pas():
+    """K-prop's real-world target is a named starting pitcher's strikeout
+    total — a bullpen PA's actual pitcher isn't identifiable pre-game
+    (pooled by team, see expected_role.py), so it isn't part of that
+    population at all, unlike hit_predictor's own is_hit model which pools
+    both roles. Scope to REALIZED pitcher_role=='sp' only, same convention
+    as season_stats._create_pitcher_start_depth_stats' sp_pbp filter."""
+    pbp = pd.DataFrame([
+        _make_pa_outcome_row(batter_id='1', play_id='p1', pitcher_role='sp'),
+        _make_pa_outcome_row(batter_id='1', play_id='p2', pitcher_role='bullpen'),
+    ])
+    batter_boxscore = pd.DataFrame([{'gamepk': '1', 'personId': '1', 'batting_order': 3}])
+
+    result = create_pa_outcome_strikeout(pbp, batter_boxscore, _game_info(), _schedule())
+
+    assert list(result['play_id']) == ['p1']
+    assert (result['pitcher_role'] == 'sp').all()
+
+
 def test_create_pa_outcome_strikeout_includes_estimated_team_pa_position():
     """Hand-computed: batter_pa_number=2, batting_order=4 -> (2-1)*9+4 = 13."""
     pbp = pd.DataFrame([_make_pa_outcome_row(batter_pa_number=2)])
