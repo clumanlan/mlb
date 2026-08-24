@@ -1,0 +1,875 @@
+<!doctype html>
+<html lang="en" data-theme="luxury">
+<head>
+<meta charset="utf-8">
+<title>n_pa_predictor v1</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex, .layout-grid, .layout-flex) > *,
+  :where([style*="display: grid"], [style*="display:grid"], [style*="display: flex"], [style*="display:flex"]) > * {
+    min-width: 0;
+  }
+  :where(p, h1, h2, h3, h4, h5, h6, li, dd, blockquote, figcaption, td, th, .badge, .label) {
+    overflow-wrap: anywhere;
+  }
+  :where(img, svg, video, canvas, iframe) { max-width: 100%; height: auto; }
+  body { background: var(--color-base-200); }
+  .diffbox { border-radius: var(--radius-box, 1rem); overflow: hidden; border: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent); }
+  code, .font-mono { font-variant-ligatures: none; }
+</style>
+</head>
+<body>
+<main class="mx-auto max-w-6xl p-6 lg:p-10 space-y-10">
+
+  <!-- HERO -->
+  <section class="hero bg-base-100 rounded-box border border-base-content/10">
+    <div class="hero-content w-full flex-col items-stretch text-left py-8">
+      <div class="flex flex-wrap items-center gap-3 mb-2">
+        <span class="badge badge-lg badge-error badge-soft">Negative result</span>
+        <span class="badge badge-lg badge-outline">2026-08-22</span>
+        <span class="badge badge-lg badge-outline">hit_predictor → n_pa_predictor</span>
+      </div>
+      <h1 class="text-4xl font-bold tracking-tight">A new model, a clean test, and a "no"</h1>
+      <p class="text-base-content/70 mt-2 max-w-3xl">
+        Built <code>n_pa_predictor</code> end-to-end — a standalone model predicting a batter's expected
+        plate-appearance count, meant to feed <code>hit_predictor</code>'s game-grain aggregation without leaking
+        realized data. Ran the real baseline against 9 seasons of S3 data. Result: <strong>no model beats
+        predicting the constant mean</strong>. Along the way, found and fixed a real undercount bug in the shared
+        PA-outcome definition, and verified starter-filtering parity against <code>hit_predictor</code> exactly.
+      </p>
+    </div>
+  </section>
+
+  <!-- STATS -->
+  <section class="stats stats-vertical lg:stats-horizontal shadow bg-base-100 border border-base-content/10 w-full">
+    <div class="stat">
+      <div class="stat-title">New files</div>
+      <div class="stat-value text-primary">11</div>
+      <div class="stat-desc">src/models/n_pa_predictor + tests/n_pa_predictor</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Lines added</div>
+      <div class="stat-value">935</div>
+      <div class="stat-desc">931 new + 4 ROADMAP.md entries</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Tests</div>
+      <div class="stat-value text-success">429 / 429</div>
+      <div class="stat-desc">full suite green, 14 new for this model</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Verdict</div>
+      <div class="stat-value text-error text-3xl">No signal</div>
+      <div class="stat-desc">global mean beats every model tried</div>
+    </div>
+  </section>
+
+  <!-- WHAT WAS BUILT -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-semibold">What was built</h2>
+    <p class="text-base-content/70 text-sm max-w-3xl">TDD'd core, then a real baseline script pulling 9 seasons from S3 — mirrors <code>hit_predictor</code>'s own <code>baseline/model/run.py</code> conventions, adapted for regression.</p>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table">
+        <thead>
+          <tr><th>File</th><th>Lines</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="font-mono text-xs whitespace-nowrap">processing/schema.py</td>
+            <td>26</td>
+            <td>Extends <code>hit_predictor</code>'s shared <code>PBP.PA_OUTCOMES</code> locally — see bug fix below</td>
+          </tr>
+          <tr>
+            <td class="font-mono text-xs whitespace-nowrap">processing/pipeline.py</td>
+            <td>54</td>
+            <td><code>build_n_pa_label</code> (realized PA count, the regression target) + <code>build_batter_game_frame</code> (starters-only, one row per batter-game)</td>
+          </tr>
+          <tr>
+            <td class="font-mono text-xs whitespace-nowrap">processing/features/batter_playing_time.py</td>
+            <td>38</td>
+            <td>Batter's own rolling <code>avg_n_pa_per_game</code>, point-in-time safe — reuses <code>rolling_stats._rolling_sum</code></td>
+          </tr>
+          <tr>
+            <td class="font-mono text-xs whitespace-nowrap">config.yaml</td>
+            <td>43</td>
+            <td>Same season split as <code>hit_predictor</code> (train / val 2024 / test 2025 locked)</td>
+          </tr>
+          <tr>
+            <td class="font-mono text-xs whitespace-nowrap">baseline/model/run.py</td>
+            <td>467</td>
+            <td>S3 pull, feature assembly (reuses <code>hit_predictor.game_context.build_expected_start_innings</code>), naive/linear/XGBoost, plots, results.md</td>
+          </tr>
+          <tr>
+            <td class="font-mono text-xs whitespace-nowrap">baseline_results.md</td>
+            <td>57</td>
+            <td>Generated by the script above — full numbers, interpretation, setup</td>
+          </tr>
+          <tr class="opacity-70">
+            <td class="font-mono text-xs whitespace-nowrap">tests/n_pa_predictor/*</td>
+            <td>246</td>
+            <td>14 tests: label construction, PA-outcome edge cases, rolling-stat point-in-time safety, starters-only scoping</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- BASELINE RESULT -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-semibold">The baseline result</h2>
+    <p class="text-base-content/70 text-sm max-w-3xl">
+      Val season 2024, 43,039 starter batter-games. Two naive floors reported — the real bar is the
+      <em>better</em> of the two, not just the global mean.
+    </p>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table">
+        <thead>
+          <tr><th>Model</th><th class="text-right">MAE</th><th class="text-right">Δ vs global mean</th><th class="text-right">RMSE</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr class="bg-success/10">
+            <td class="font-semibold">Naive (global mean)</td>
+            <td class="text-right font-mono">0.4955</td>
+            <td class="text-right font-mono">—</td>
+            <td class="text-right font-mono">0.7790</td>
+            <td><span class="badge badge-success badge-soft">Best</span></td>
+          </tr>
+          <tr>
+            <td>Naive (batter's own rolling avg)</td>
+            <td class="text-right font-mono">0.5611</td>
+            <td class="text-right font-mono text-error">+0.0656</td>
+            <td class="text-right font-mono">0.7399</td>
+            <td><span class="badge badge-ghost">Worse</span></td>
+          </tr>
+          <tr>
+            <td>Linear regression</td>
+            <td class="text-right font-mono">0.5420</td>
+            <td class="text-right font-mono text-error">+0.0465</td>
+            <td class="text-right font-mono">0.7022</td>
+            <td><span class="badge badge-ghost">Worse</span></td>
+          </tr>
+          <tr>
+            <td>XGBoost</td>
+            <td class="text-right font-mono">0.5575</td>
+            <td class="text-right font-mono text-error">+0.0620</td>
+            <td class="text-right font-mono">0.7265</td>
+            <td><span class="badge badge-ghost">Worse</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div role="alert" class="alert alert-warning alert-soft">
+      <span><strong>Features tried:</strong> batting_order, home/away, opposing starter's <code>expected_start_innings</code>,
+      batter's own rolling PA rate, batting team's rolling win_pct/runs_scored — none demonstrate signal beyond the constant mean.
+      Do not wire an unproven <code>expected_n_pa</code> into <code>hit_predictor</code>'s game-grain aggregation yet.</span>
+    </div>
+  </section>
+
+  <!-- DISTRIBUTION -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-semibold">Why: the n_pa distribution</h2>
+    <p class="text-base-content/70 text-sm max-w-3xl">Mean 4.01 · Median 4 · Std 0.78. The target is so concentrated that a constant guess is already close almost every time.</p>
+    <div class="bg-base-100 rounded-box border border-base-content/10 p-5 space-y-2">
+      <div class="grid grid-cols-[3rem_1fr_5rem_4rem] gap-3 items-center text-sm" id="dist-rows">
+        <!-- rows injected via simple bars -->
+      </div>
+    </div>
+    <script>
+      const dist = [
+        {n: 1, pct: 0.26}, {n: 2, pct: 3.46}, {n: 3, pct: 16.12},
+        {n: 4, pct: 56.78}, {n: 5, pct: 21.80}, {n: 6, pct: 1.54}, {n: 7, pct: 0.04},
+      ];
+      const max = Math.max(...dist.map(d => d.pct));
+      const container = document.getElementById('dist-rows');
+      for (const d of dist) {
+        const inCore = d.n >= 3 && d.n <= 5;
+        container.insertAdjacentHTML('beforeend', `
+          <div class="font-mono text-right">${d.n} PA</div>
+          <div class="h-5 rounded-full overflow-hidden bg-base-200">
+            <div class="h-full ${inCore ? 'bg-primary' : 'bg-neutral/40'} rounded-full" style="width:${Math.max(2, d.pct / max * 100)}%"></div>
+          </div>
+          <div class="font-mono text-right">${d.pct.toFixed(2)}%</div>
+          <div>${inCore ? '<span class="badge badge-primary badge-sm badge-soft">core</span>' : ''}</div>
+        `);
+      }
+    </script>
+    <div class="stats shadow bg-base-100 border border-base-content/10 w-full">
+      <div class="stat place-items-center">
+        <div class="stat-title">3, 4, or 5 PA combined</div>
+        <div class="stat-value text-primary">94.70%</div>
+        <div class="stat-desc">the remaining 5.3% (1–2 or 6–7 PA) is where real signal would have to live — early pulls, blowouts, extra innings</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BUG FOUND -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-semibold">Bug found while verifying starters-filter parity</h2>
+    <p class="text-base-content/70 text-sm max-w-3xl">
+      User asked to confirm the starters filter mirrors <code>hit_predictor</code>'s exactly. It does — same
+      <code>_create_batting_order</code> function, same inner join. The parity check surfaced a different, real bug instead:
+      <code>hit_predictor</code>'s shared <code>PBP.PA_OUTCOMES</code> silently drops <code>'Field Error'</code>
+      (~1,100 real plate appearances/season) and <code>'Sac Fly Double Play'</code> (~13/season).
+    </p>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="card card-border bg-base-100 border-error/30">
+        <div class="card-body">
+          <h3 class="card-title text-base">Before fix</h3>
+          <div class="stats stats-vertical shadow-none bg-transparent p-0">
+            <div class="stat p-0 pb-2">
+              <div class="stat-title text-xs">hit_predictor starter-games</div>
+              <div class="stat-value text-2xl">43,039</div>
+            </div>
+            <div class="stat p-0">
+              <div class="stat-title text-xs">n_pa_predictor starter-games</div>
+              <div class="stat-value text-2xl text-error">43,035</div>
+              <div class="stat-desc">4 starters silently dropped — their only PA that game was a reach-on-error</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card card-border bg-base-100 border-success/30">
+        <div class="card-body">
+          <h3 class="card-title text-base">After fix</h3>
+          <div class="stats stats-vertical shadow-none bg-transparent p-0">
+            <div class="stat p-0 pb-2">
+              <div class="stat-title text-xs">hit_predictor starter-games</div>
+              <div class="stat-value text-2xl">43,039</div>
+            </div>
+            <div class="stat p-0">
+              <div class="stat-title text-xs">n_pa_predictor starter-games</div>
+              <div class="stat-value text-2xl text-success">43,039</div>
+              <div class="stat-desc">exact parity — zero mismatches either direction</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div role="alert" class="alert alert-info alert-soft">
+      <span><strong>Not fixed in <code>hit_predictor</code>'s shared schema.py.</strong> That definition feeds
+      <code>season_stats.py</code>/<code>rolling_stats.py</code> PA-denominator and TTO-capping logic across every
+      existing experiment — changing it would shift past results without a full re-run. Worked around locally in
+      <code>n_pa_predictor</code>'s own schema.py instead; flagged in ROADMAP.md as a deliberate call for whoever
+      owns the next <code>hit_predictor</code> experiment cycle.</span>
+    </div>
+
+    <h3 class="text-lg font-semibold pt-2">schema.py — the fix</h3>
+    <div id="diff-schema" class="diffbox"></div>
+
+    <h3 class="text-lg font-semibold pt-2">pipeline.py — using the extended set</h3>
+    <div id="diff-pipeline" class="diffbox"></div>
+  </section>
+
+  <!-- DATA FLOW -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-semibold">Data flow</h2>
+    <div class="bg-base-100 rounded-box border border-base-content/10 p-6">
+      <pre class="mermaid">
+flowchart LR
+  pbp[["play-by-play\n(S3, per-pitch)"]] --> label["build_n_pa_label\nfilter to PA_OUTCOMES\n(+ Field Error, Sac Fly DP)"]
+  label --> frame["build_batter_game_frame\ninner join _create_batting_order\n(starters only)"]
+  boxscore[["batter_boxscore"]] --> frame
+  schedule[["schedule"]] --> frame
+  frame --> feat["batter_playing_time\nrolling avg_n_pa_per_game\n(shift(1), point-in-time safe)"]
+  hp["hit_predictor.game_context\nexpected_start_innings"] --> assemble["baseline/model/run.py\nfeature assembly"]
+  feat --> assemble
+  frame --> assemble
+  assemble --> models{{"naive / linear / XGBoost"}}
+  models --> result["MAE 0.4955 (global mean)\nbeats every trained model"]
+      </pre>
+    </div>
+  </section>
+
+  <!-- ROADMAP diff -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-semibold">ROADMAP.md — what got logged</h2>
+    <p class="text-base-content/70 text-sm max-w-3xl">Four entries added this session (a concurrent session's own shrinkage-baseline edits to this file are excluded here — this shows only what this work added).</p>
+    <div id="diff-roadmap" class="diffbox"></div>
+  </section>
+
+  <!-- FOLLOW-UP: LOW-TAIL INVESTIGATION -->
+  <section class="space-y-3">
+    <div class="flex items-center gap-3 flex-wrap">
+      <h2 class="text-2xl font-semibold">Update: chasing the low-PA tail</h2>
+      <span class="badge badge-outline">2026-08-23</span>
+    </div>
+    <p class="text-base-content/70 text-sm max-w-3xl">
+      User's instinct: focus on batters who get ≤3 PA (early-exit / compressed-game side of the tail), reasoning
+      it's more predictable — a "strong pitcher vs. weak batter" effect. Pulled real 2024 data to test it before
+      writing any model code.
+    </p>
+
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table">
+        <thead><tr><th>Batting order</th><th class="text-right">Low-tail rate (n_pa ≤ 3)</th></tr></thead>
+        <tbody>
+          <tr><td>1 (leadoff)</td><td class="text-right font-mono">5.3%</td></tr>
+          <tr><td>2</td><td class="text-right font-mono">6.3%</td></tr>
+          <tr><td>3</td><td class="text-right font-mono">7.6%</td></tr>
+          <tr><td>4</td><td class="text-right font-mono">8.5%</td></tr>
+          <tr><td>5</td><td class="text-right font-mono">13.8%</td></tr>
+          <tr><td>6</td><td class="text-right font-mono">20.2%</td></tr>
+          <tr><td>7</td><td class="text-right font-mono">28.6%</td></tr>
+          <tr><td>8</td><td class="text-right font-mono">38.9%</td></tr>
+          <tr class="bg-warning/10"><td class="font-semibold">9</td><td class="text-right font-mono font-semibold">49.4%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="text-base-content/70 text-sm">Batting order alone is the dominant mechanical driver — mostly expected. The real question: controlling for order ≥ 6, is there a second, independent signal?</p>
+
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table">
+        <thead><tr><th>Correlation with team's total PA that game</th><th class="text-right">r</th><th>Reads as</th></tr></thead>
+        <tbody>
+          <tr class="bg-success/10">
+            <td class="font-semibold">Opposing starter's WHIP (that game)</td>
+            <td class="text-right font-mono font-semibold">+0.47</td>
+            <td><span class="badge badge-success badge-soft badge-sm">strong</span></td>
+          </tr>
+          <tr class="bg-success/10">
+            <td>Opposing starter's pitches/inning</td>
+            <td class="text-right font-mono">+0.40</td>
+            <td><span class="badge badge-success badge-soft badge-sm">strong</span></td>
+          </tr>
+          <tr>
+            <td>Opposing starter's innings pitched</td>
+            <td class="text-right font-mono">−0.42</td>
+            <td><span class="badge badge-ghost badge-sm">confound — length follows from dominance</span></td>
+          </tr>
+          <tr>
+            <td>Opposing starter's K-rate</td>
+            <td class="text-right font-mono">−0.004</td>
+            <td><span class="badge badge-error badge-soft badge-sm">~none</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div role="alert" class="alert alert-info alert-soft">
+      <span><strong>The mechanism isn't strikeouts — it's traffic.</strong> A pitcher who avoids walks/hits
+      compresses the whole game's PA count regardless of how many batters he strikes out, which is what pushes a
+      bottom-of-order hitter below their 4th trip. Controlling for batting order ≥ 6: WHIP 1.03 (low-tail games)
+      vs. 1.64 (normal games) — a large, real gap, not noise.</span>
+    </div>
+
+    <h3 class="text-lg font-semibold pt-2">Decision: interaction, not a filtered submodel</h3>
+    <p class="text-base-content/70 text-sm max-w-3xl">
+      Considered restricting training data to batting_order ≥ 6 (a specialist low-tail classifier) vs. adding WHIP
+      as a feature on the full dataset and letting a tree model find the order × WHIP interaction itself. Chose the
+      latter first — cheaper to test, keeps one general model instead of two, and XGBoost already had
+      <code>batting_order</code> in v1; it just never had WHIP to interact it with.
+    </p>
+
+    <h3 class="text-lg font-semibold pt-2">What changed — opposing starter's season WHIP added</h3>
+    <div id="diff-whip" class="diffbox"></div>
+
+    <div class="card card-border bg-base-100 border-warning/30">
+      <div class="card-body">
+        <h3 class="card-title text-base flex items-center gap-2">
+          Rerun result
+          <span class="badge badge-warning badge-soft">still doesn't beat naive</span>
+        </h3>
+        <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mt-2">
+          <table class="table table-sm">
+            <thead><tr><th>Model</th><th class="text-right">MAE (before WHIP)</th><th class="text-right">MAE (with WHIP)</th></tr></thead>
+            <tbody>
+              <tr class="bg-success/10"><td class="font-semibold">Naive (global mean)</td><td class="text-right font-mono">0.4955</td><td class="text-right font-mono">0.4955</td></tr>
+              <tr><td>Linear regression</td><td class="text-right font-mono">0.5420</td><td class="text-right font-mono">0.5419</td></tr>
+              <tr><td>XGBoost</td><td class="text-right font-mono">0.5575</td><td class="text-right font-mono text-warning">0.5539</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="text-sm text-base-content/70 mt-2">
+          XGBoost moves slightly (0.5575 → 0.5539) but nowhere near naive's 0.4955. Feature importance confirms
+          <code>opp_starter_whip_season</code> <em>is</em> being used (~0.035 importance, not zero) — it's just
+          swamped by <code>batting_order</code> (~0.50) at the whole-population level. This matches the earlier
+          read: the WHIP effect is real but lives in a narrow slice (order ≥ 6) and shifts probability mass at the
+          margin (3 vs 4 PA) — a shift that regression MAE on the full distribution is the wrong lens to see.
+        </p>
+        <div role="alert" class="alert alert-success alert-soft mt-2">
+          <span><strong>Next:</strong> reframe as a binary classifier, <code>P(n_pa ≤ 3)</code>, scored with log loss/Brier/ROC-AUC instead of MAE — not a filtered submodel, but evaluated on the slice where the signal actually lives.</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- V1 CLASSIFIER — THE WIN -->
+  <section class="space-y-3">
+    <div class="flex items-center gap-3 flex-wrap">
+      <h2 class="text-2xl font-semibold">experiments/v1_low_pa_classifier — first positive result</h2>
+      <span class="badge badge-success badge-lg">Real signal</span>
+      <span class="badge badge-outline">2026-08-23</span>
+    </div>
+    <p class="text-base-content/70 text-sm max-w-3xl">
+      User's directive: reframe as a binary classifier (<code>low_pa = n_pa ≤ 3</code>), same feature set, full
+      dataset (no filtering by batting order — let the model learn the interaction). Prioritize <strong>precision</strong>
+      over accuracy/recall, since predictions feed a betting decision where a false positive is the costly error.
+      New versioned experiment created — <code>baseline/</code> stays the frozen negative-result record,
+      <code>experiments/v1_low_pa_classifier/</code> is the first real experiment, with a summary header documenting
+      the full pivot.
+    </p>
+
+    <div class="stats stats-vertical lg:stats-horizontal shadow bg-base-100 border border-base-content/10 w-full">
+      <div class="stat">
+        <div class="stat-title">Base rate</div>
+        <div class="stat-value">19.8%</div>
+        <div class="stat-desc">unconditional P(n_pa ≤ 3)</div>
+      </div>
+      <div class="stat">
+        <div class="stat-title">Best naive (per-slot)</div>
+        <div class="stat-value">0.394</div>
+        <div class="stat-desc">PR-AUC — batting order alone</div>
+      </div>
+      <div class="stat">
+        <div class="stat-title text-success">Logistic regression</div>
+        <div class="stat-value text-success">0.440</div>
+        <div class="stat-desc">PR-AUC — beats naive AND XGBoost</div>
+      </div>
+      <div class="stat">
+        <div class="stat-title text-success">Precision @ 0.6 confidence</div>
+        <div class="stat-value text-success">60.7%</div>
+        <div class="stat-desc">~3x base rate, n=1,214 val predictions</div>
+      </div>
+    </div>
+
+    <div role="alert" class="alert alert-info alert-soft">
+      <span><strong>LR beat XGBoost</strong> (PR-AUC 0.440 vs 0.414, ROC-AUC 0.771 vs 0.756) — the batting_order ×
+      WHIP relationship looks close to linear in log-odds rather than needing tree-based interaction discovery.
+      Simpler model won, which is also the more trustworthy result for a betting application.</span>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <figure class="bg-base-100 rounded-box border border-base-content/10 p-3">
+        <img src="assets/pr_curve.png" alt="Precision-recall curve" class="rounded-box w-full">
+        <figcaption class="text-xs text-base-content/60 text-center pt-2">LR and XGBoost sit clearly above both naive floors across most of the recall range.</figcaption>
+      </figure>
+      <figure class="bg-base-100 rounded-box border border-base-content/10 p-3">
+        <img src="assets/calibration_curve.png" alt="Calibration curve" class="rounded-box w-full">
+        <figcaption class="text-xs text-base-content/60 text-center pt-2">Predicted probabilities track actual low_pa rate reasonably closely, val 2024.</figcaption>
+      </figure>
+    </div>
+
+    <h3 class="text-lg font-semibold pt-2">Confidence-threshold sweep — the betting-relevant view</h3>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table">
+        <thead><tr><th>Threshold</th><th class="text-right">Precision (LR)</th><th class="text-right">Coverage (N)</th><th class="text-right">Recall</th></tr></thead>
+        <tbody>
+          <tr><td>0.5</td><td class="text-right font-mono">54.5%</td><td class="text-right font-mono">3,413</td><td class="text-right font-mono">21.8%</td></tr>
+          <tr class="bg-success/10"><td class="font-semibold">0.6</td><td class="text-right font-mono font-semibold">60.7%</td><td class="text-right font-mono">1,214</td><td class="text-right font-mono">8.6%</td></tr>
+          <tr><td>0.7</td><td class="text-right font-mono">60.6%</td><td class="text-right font-mono">282</td><td class="text-right font-mono">2.0%</td></tr>
+          <tr class="opacity-60"><td>0.8+</td><td class="text-right font-mono">rises, but N &lt; 60</td><td class="text-right font-mono">—</td><td class="text-right font-mono">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div role="alert" class="alert alert-warning alert-soft">
+      <span><strong>Structural ceiling on the naive floor:</strong> the per-slot lookup can never predict above
+      ~59% confidence (the 9-hole's own historical rate) — no matter how the threshold is set. Any prediction above
+      that has to come from the model actually combining batting_order with WHIP, which is exactly what's
+      happening here.</span>
+    </div>
+
+    <figure class="bg-base-100 rounded-box border border-base-content/10 p-3 max-w-xl">
+      <img src="assets/feature_importance_v1.png" alt="XGBoost feature importance, v1 classifier" class="rounded-box w-full">
+    </figure>
+
+    <div role="alert" class="alert alert-info alert-soft">
+      <span><strong>Not yet a proven edge.</strong> This is raw predictive precision, not compared against
+      DraftKings' actual implied probability on a PA-adjacent prop. De-vig comparison is the next gate before
+      treating this as bettable, not just predictive.</span>
+    </div>
+  </section>
+
+  <!-- THRESHOLD LOCKED -->
+  <section class="space-y-3">
+    <div class="flex items-center gap-3 flex-wrap">
+      <h2 class="text-2xl font-semibold">Operating threshold locked: 0.85, XGBoost</h2>
+      <span class="badge badge-success badge-lg">Final for this session</span>
+      <span class="badge badge-outline">2026-08-23</span>
+    </div>
+    <p class="text-base-content/70 text-sm max-w-3xl">
+      User spotted an apparent LR-vs-XGBoost precision "crossover" around 0.8 in the sweep table. Added Wilson 95%
+      confidence intervals to the threshold sweep (now permanent in <code>train.py</code>) before trusting it —
+      turned out to be small-sample noise, and revealed a better real operating point further out.
+    </p>
+
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table">
+        <thead><tr><th>Threshold</th><th class="text-right">LR precision (95% CI)</th><th class="text-right">n</th><th class="text-right">XGB precision (95% CI)</th><th class="text-right">n</th></tr></thead>
+        <tbody>
+          <tr><td>0.60</td><td class="text-right font-mono">60.7% [57.9, 63.4]</td><td class="text-right font-mono">1,214</td><td class="text-right font-mono">54.9% [52.5, 57.2]</td><td class="text-right font-mono">1,772</td></tr>
+          <tr><td>0.70</td><td class="text-right font-mono">60.6% [54.8, 66.2]</td><td class="text-right font-mono">282</td><td class="text-right font-mono">55.9% [52.2, 59.5]</td><td class="text-right font-mono">723</td></tr>
+          <tr class="opacity-70"><td>0.80 <span class="badge badge-ghost badge-xs">noise</span></td><td class="text-right font-mono">58.3% [45.7, 69.9]</td><td class="text-right font-mono">60</td><td class="text-right font-mono">58.6% [52.3, 64.7]</td><td class="text-right font-mono">237</td></tr>
+          <tr class="bg-success/10"><td class="font-semibold">0.85 ✓ locked</td><td class="text-right font-mono">54.2% [35.1, 72.1]</td><td class="text-right font-mono">24</td><td class="text-right font-mono font-semibold">64.7% [55.6, 72.8]</td><td class="text-right font-mono">116</td></tr>
+          <tr class="opacity-70"><td>0.90</td><td class="text-right font-mono">71.4% [35.9, 91.8]</td><td class="text-right font-mono">7</td><td class="text-right font-mono">59.7% [47.3, 71.0]</td><td class="text-right font-mono">62</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div role="alert" class="alert alert-success alert-soft">
+      <span><strong>XGBoost @ 0.85</strong> — 64.7% precision, 95% CI [55.6%, 72.8%], n=116 val predictions
+      (~1 qualifying game every 2 days across a season). Tighter CI and higher point estimate than 0.8, and it
+      beats LR's overall PR-AUC edge specifically at this selective, low-volume end — matches the stated use case
+      directly ("not going to be making many bets, selective anyway"). LR's own n=24 at 0.85 is too thin to trust.</span>
+    </div>
+
+    <h3 class="text-lg font-semibold pt-2">Folder structure built this session</h3>
+    <div class="mockup-code text-xs">
+<pre data-prefix=""><code>src/models/n_pa_predictor/</code></pre>
+<pre data-prefix=""><code>├── config.yaml                    <span class="text-base-content/50"># season split, mirrors hit_predictor</span></code></pre>
+<pre data-prefix=""><code>├── baseline_results.md            <span class="text-base-content/50"># regression baseline — negative</span></code></pre>
+<pre data-prefix=""><code>├── processing/</code></pre>
+<pre data-prefix=""><code>│   ├── schema.py                  <span class="text-base-content/50"># PA_OUTCOMES, fixed Field Error bug</span></code></pre>
+<pre data-prefix=""><code>│   ├── pipeline.py                <span class="text-base-content/50"># build_n_pa_label, build_batter_game_frame</span></code></pre>
+<pre data-prefix=""><code>│   └── features/batter_playing_time.py</code></pre>
+<pre data-prefix=""><code>├── baseline/model/run.py          <span class="text-base-content/50"># regression baseline — negative</span></code></pre>
+<pre data-prefix=""><code>├── experiments/v1_low_pa_classifier/train.py  <span class="text-success">✓ positive, 0.85 locked</span></code></pre>
+<pre data-prefix=""><code>├── plots/{baseline-model,v1_low_pa_classifier}/</code></pre>
+<pre data-prefix=""><code>└── utils/mlflow_logging.py</code></pre>
+<pre data-prefix=""><code></code></pre>
+<pre data-prefix=""><code>tests/n_pa_predictor/  <span class="text-base-content/50"># 14 tests, TDD'd</span></code></pre>
+<pre data-prefix=""><code>├── conftest.py, test_pipeline.py, test_batter_playing_time.py</code></pre>
+    </div>
+  </section>
+
+  <!-- NEXT STEPS -->
+  <section class="space-y-3">
+    <h2 class="text-2xl font-semibold">Recommendation</h2>
+    <ul class="steps steps-vertical lg:steps-horizontal w-full">
+      <li class="step step-primary">Baseline (regression) — negative, documented</li>
+      <li class="step step-primary">v1 classifier — positive, real precision lift</li>
+      <li class="step step-primary">Threshold locked: 0.85, XGBoost</li>
+      <li class="step step-primary">Next session: build a stronger model — more/better features, larger val sample</li>
+      <li class="step">De-vig comparison against DK's actual lines before calling this an edge</li>
+    </ul>
+  </section>
+
+</main>
+
+<script type="module">
+  import { File, FileDiff } from "https://esm.sh/@pierre/diffs@1.2.10?bundle";
+
+  const theme = { light: "github-light", dark: "github-dark" };
+  const options = { theme, themeType: "dark", overflow: "wrap" };
+
+  new FileDiff({ ...options, diffStyle: "split" }).render({
+    containerWrapper: document.querySelector("#diff-schema"),
+    oldFile: {
+      name: "src/models/n_pa_predictor/processing/schema.py",
+      contents: `from models.hit_predictor.processing.schema import PBP
+
+# n_pa_predictor operates at batter-GAME grain (one row per starter per
+# game), not per-PA — a different grain from hit_predictor's is_hit model.
+# PA_OUTCOMES (what counts as a plate appearance) is shared across both
+# models, so it's imported rather than redefined here — see
+# hit_predictor/processing/schema.py:119 for the definition and rationale.
+
+__all__ = ['PBP']
+`,
+    },
+    newFile: {
+      name: "src/models/n_pa_predictor/processing/schema.py",
+      contents: `from models.hit_predictor.processing.schema import PBP
+
+# n_pa_predictor operates at batter-GAME grain (one row per starter per
+# game), not per-PA — a different grain from hit_predictor's is_hit model.
+#
+# PA_OUTCOMES here starts from hit_predictor's PBP.PA_OUTCOMES (the shared
+# "what counts as a plate appearance" set) but adds two play_result values
+# missing from it: 'Field Error' (reached base on a fielding error —
+# indisputably a completed PA, batter put the ball in play) and
+# 'Sac Fly Double Play' (same category as 'Sac Fly', which IS included).
+# Discovered 2026-08-22 by comparing this model's starter-game count against
+# hit_predictor's own create_pa_outcome output for the same season: without
+# these two, 4 starters whose ONLY plate appearance in a game was one of
+# these two outcomes were silently dropped entirely (label had no row for
+# them), and every batter who reached on error at least once was
+# undercounted by 1 PA. 'Field Error' alone is ~1,100 PAs/season (2024) —
+# not a rounding error.
+#
+# This is a real gap in hit_predictor's canonical PBP.PA_OUTCOMES too (it
+# affects hit_predictor's own season/rolling "PA denominator" stats and TTO
+# capping the same way), but fixing that shared definition is a bigger-
+# blast-radius change belonging to hit_predictor's own maintainer, not made
+# unilaterally here — flagged in ROADMAP.md instead. n_pa_predictor's own
+# label needs the accurate count regardless, so it's extended locally.
+PA_OUTCOMES = PBP.PA_OUTCOMES | {'Field Error', 'Sac Fly Double Play'}
+
+__all__ = ['PBP', 'PA_OUTCOMES']
+`,
+    },
+  });
+
+  new FileDiff({ ...options, diffStyle: "split" }).render({
+    containerWrapper: document.querySelector("#diff-pipeline"),
+    oldFile: {
+      name: "src/models/n_pa_predictor/processing/pipeline.py",
+      contents: `import pandas as pd
+
+from models.hit_predictor.processing.pipeline import _create_batting_order
+from models.n_pa_predictor.processing.schema import PBP
+
+
+def build_n_pa_label(pbp: pd.DataFrame) -> pd.DataFrame:
+    """One row per (gamepk, batter_id): realized plate-appearance count for
+    that batter-game — the regression target for this model.
+
+    Built independently from hit_predictor's own batter_pa_number counter
+    (which runs on unfiltered pbp) by filtering to PBP.PA_OUTCOMES first,
+    then counting distinct play_ids — so a non-PA-outcome row (e.g. a
+    runner-movement event carrying its own play_id) can't inflate the count.
+    This is a realized/post-game label, not a feature, so using it as-is
+    (no point-in-time shift) is correct here.
+    """
+
+    pa_rows = pbp[pbp['play_result'].isin(PBP.PA_OUTCOMES)]
+    pa_rows = pa_rows[['gamepk', 'play_id', 'batter_id']].drop_duplicates()
+
+    return (
+        pa_rows
+        .groupby(['gamepk', 'batter_id'])
+        .size()
+        .rename('n_pa')
+        .reset_index()
+    )
+`,
+    },
+    newFile: {
+      name: "src/models/n_pa_predictor/processing/pipeline.py",
+      contents: `import pandas as pd
+
+from models.hit_predictor.processing.pipeline import _create_batting_order
+from models.n_pa_predictor.processing.schema import PA_OUTCOMES
+
+
+def build_n_pa_label(pbp: pd.DataFrame) -> pd.DataFrame:
+    """One row per (gamepk, batter_id): realized plate-appearance count for
+    that batter-game — the regression target for this model.
+
+    Built independently from hit_predictor's own batter_pa_number counter
+    (which runs on unfiltered pbp) by filtering to PA_OUTCOMES first, then
+    counting distinct play_ids — so a non-PA-outcome row (e.g. a
+    runner-movement event carrying its own play_id) can't inflate the count.
+    Uses n_pa_predictor's own (locally extended) PA_OUTCOMES — see
+    schema.py — not hit_predictor's PBP.PA_OUTCOMES directly, which is
+    missing 'Field Error'/'Sac Fly Double Play'. This is a realized/
+    post-game label, not a feature, so using it as-is (no point-in-time
+    shift) is correct here.
+    """
+
+    pa_rows = pbp[pbp['play_result'].isin(PA_OUTCOMES)]
+    pa_rows = pa_rows[['gamepk', 'play_id', 'batter_id']].drop_duplicates()
+
+    return (
+        pa_rows
+        .groupby(['gamepk', 'batter_id'])
+        .size()
+        .rename('n_pa')
+        .reset_index()
+    )
+`,
+    },
+  });
+
+  new FileDiff({ ...options, diffStyle: "unified" }).render({
+    containerWrapper: document.querySelector("#diff-roadmap"),
+    oldFile: {
+      name: "ROADMAP.md (excerpt)",
+      contents: `**Last updated:** 2026-08-22
+
+- v4 (inning-based pitcher-role gating + game context): run 2026-08-22 ...
+
+1. [ ] Explain/close the naive-baseline gap at game grain — ... every other
+   item below is secondary until the model demonstrably beats a fair baseline.
+   - Caveat surfaced 2026-08-22: realized n_pa is not known at prediction
+     time in production ... closing this gap requires predicting n_pa
+     pre-game (lineup slot, team scoring environment, opposing pitcher's
+     expected innings, etc.), not just adding realized n_pa as a feature.
+`,
+    },
+    newFile: {
+      name: "ROADMAP.md (excerpt)",
+      contents: `**Last updated:** 2026-08-22 (... + n_pa predictor v1 baseline: negative
+result + ...)
+
+- v4 (inning-based pitcher-role gating + game context): run 2026-08-22 ...
+- n_pa pre-game prediction model: v1 baseline built and run 2026-08-22
+  (src/models/n_pa_predictor/). Result: negative. Global-mean naive
+  (MAE 0.4955) beats rolling-avg naive, linear regression, AND XGBoost.
+  56.8% of starter-games are exactly 4 PA, 94.7% in {3,4,5} — a constant
+  prediction is already close almost always. Do not wire an unproven
+  expected_n_pa into hit_predictor's game-grain aggregation yet.
+- Bug found + fixed 2026-08-22, while building n_pa_predictor:
+  PBP.PA_OUTCOMES (schema.py:119) is missing 'Field Error' (~1,100
+  PAs/season) and 'Sac Fly Double Play' (~13/season). Worked around
+  locally in n_pa_predictor's own schema.py; not fixed in hit_predictor's
+  shared schema.py (bigger blast radius, flagged for whoever owns the
+  next experiments/v{N}_* cycle).
+
+1. [~] Explain/close the naive-baseline gap at game grain — ...
+   - Caveat surfaced 2026-08-22: ... (unchanged)
+   - n_pa predictor v1 baseline result (2026-08-22): negative — see
+     Current state above. Batting_order + home/away + opposing starter's
+     expected_start_innings + batter's own rolling PA rate + team win_pct
+     beat neither naive floor at batter-game grain (MAE). Don't wire
+     expected_n_pa into hit_predictor until a feature set actually clears
+     the floor.
+`,
+    },
+  });
+
+  new FileDiff({ ...options, diffStyle: "unified" }).render({
+    containerWrapper: document.querySelector("#diff-whip"),
+    oldFile: {
+      name: "src/models/n_pa_predictor/baseline/model/run.py (excerpt)",
+      contents: `batter_game = batter_game.merge(
+    expected_start_innings.rename(columns={"personId": "opp_starting_pitcher_id"}),
+    on=["gamepk", "opp_starting_pitcher_id"], how="left",
+)
+
+# ------------------------- BATTER'S OWN ROLLING PA RATE ---------------------- #
+...
+
+FEATURE_COLS = [
+    "batting_order",
+    "is_home",
+    "expected_start_innings",
+    "expected_start_innings_weight",
+    "batter_n_pa_roll_season_games_n",
+    "batter_n_pa_roll_season_avg_n_pa_per_game",
+    "team_roll_season_win_pct",
+    "team_roll_season_runs_scored",
+]
+`,
+    },
+    newFile: {
+      name: "src/models/n_pa_predictor/baseline/model/run.py (excerpt)",
+      contents: `batter_game = batter_game.merge(
+    expected_start_innings.rename(columns={"personId": "opp_starting_pitcher_id"}),
+    on=["gamepk", "opp_starting_pitcher_id"], how="left",
+)
+
+# ------------------------- OPPOSING STARTER'S SEASON WHIP -------------------- #
+# Traffic allowed (walks + hits), not strikeouts, is what compresses a team's total
+# PA count that game — confirmed on real 2024 data (WHIP corr +0.47 with team PA
+# count, K-rate corr ~0.00) before adding this. SP-role-only, this-season rolling,
+# expanding + shift(1) — same point-in-time-safe engine as everything else here.
+pitcher_rolling_season_stats = rolling_stats.build_pitcher_rolling_stats_all_roles(
+    pitcher_boxscore, pbp, window="season"
+)
+opp_starter_whip = (
+    pitcher_rolling_season_stats[pitcher_rolling_season_stats["pitcher_role"] == "sp"]
+    [["pitcher_key_id", "gamepk", "pitcher_roll_season_whip"]]
+    .rename(columns={"pitcher_key_id": "opp_starting_pitcher_id",
+                      "pitcher_roll_season_whip": "opp_starter_whip_season"})
+)
+opp_starter_whip["opp_starting_pitcher_id"] = opp_starter_whip["opp_starting_pitcher_id"].astype(str)
+opp_starter_whip["gamepk"] = opp_starter_whip["gamepk"].astype(str)
+batter_game = batter_game.merge(opp_starter_whip, on=["gamepk", "opp_starting_pitcher_id"], how="left")
+
+# ------------------------- BATTER'S OWN ROLLING PA RATE ---------------------- #
+...
+
+FEATURE_COLS = [
+    "batting_order",
+    "is_home",
+    "expected_start_innings",
+    "expected_start_innings_weight",
+    "opp_starter_whip_season",
+    "batter_n_pa_roll_season_games_n",
+    "batter_n_pa_roll_season_avg_n_pa_per_game",
+    "team_roll_season_win_pct",
+    "team_roll_season_runs_scored",
+]
+`,
+    },
+  });
+</script>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  const paint = document.createElement("canvas").getContext("2d");
+  function toRgba(color) {
+    paint.clearRect(0, 0, 1, 1);
+    paint.fillStyle = "#000";
+    paint.fillStyle = color;
+    paint.fillRect(0, 0, 1, 1);
+    return paint.getImageData(0, 0, 1, 1).data;
+  }
+  function compositeRgba(foreground, background) {
+    const foregroundAlpha = foreground[3] / 255;
+    const backgroundAlpha = background[3] / 255;
+    const alpha = foregroundAlpha + backgroundAlpha * (1 - foregroundAlpha);
+    if (alpha === 0) return [0, 0, 0, 0];
+    return [
+      (foreground[0] * foregroundAlpha + background[0] * backgroundAlpha * (1 - foregroundAlpha)) / alpha,
+      (foreground[1] * foregroundAlpha + background[1] * backgroundAlpha * (1 - foregroundAlpha)) / alpha,
+      (foreground[2] * foregroundAlpha + background[2] * backgroundAlpha * (1 - foregroundAlpha)) / alpha,
+      alpha * 255,
+    ];
+  }
+  function pageIsDark() {
+    const root = document.documentElement;
+    const rootBackground = toRgba(getComputedStyle(root).backgroundColor);
+    const bodyBackground = document.body ? toRgba(getComputedStyle(document.body).backgroundColor) : [0, 0, 0, 0];
+    const [r, g, b, a] = compositeRgba(bodyBackground, rootBackground);
+    if (a > 0) {
+      return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
+    }
+    const colorScheme = getComputedStyle(root).colorScheme;
+    if (colorScheme.includes("dark") && !colorScheme.includes("light")) return true;
+    if (colorScheme.includes("light") && !colorScheme.includes("dark")) return false;
+    return darkQuery.matches;
+  }
+  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({ el, src: el.innerHTML }));
+  let applied;
+  let rendering = false;
+  let queued = false;
+  function queueRender() {
+    queued = true;
+    if (rendering) return;
+    void render();
+  }
+  async function render() {
+    rendering = true;
+    try {
+      while (queued) {
+        queued = false;
+        const themeName = pageIsDark() ? "dark" : "default";
+        if (themeName === applied) continue;
+        mermaid.initialize({ startOnLoad: false, theme: themeName, securityLevel: "strict" });
+        for (const { el, src } of diagrams) {
+          el.removeAttribute("data-processed");
+          el.innerHTML = src;
+        }
+        try {
+          await mermaid.run({ nodes: diagrams.map((d) => d.el) });
+        } catch (error) {
+          console.error("Mermaid diagram render failed:", error);
+          return;
+        }
+        applied = themeName;
+      }
+    } finally {
+      rendering = false;
+      if (queued) queueRender();
+    }
+  }
+  if (document.readyState === "complete") queueRender();
+  else window.addEventListener("load", queueRender, { once: true });
+  const themeObserver = new MutationObserver(queueRender);
+  for (const el of [document.documentElement, document.body]) {
+    if (!el) continue;
+    themeObserver.observe(el, { attributes: true, attributeFilter: ["data-theme", "class", "style"] });
+  }
+  document.addEventListener("change", queueRender, true);
+  document.addEventListener("transitionend", ({ propertyName }) => { if (propertyName === "background-color") queueRender(); }, true);
+  darkQuery.addEventListener("change", queueRender);
+</script>
+
+</body>
+</html>

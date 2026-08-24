@@ -5,6 +5,8 @@ import pytest
 import inspect
 
 from models.hit_predictor.processing.features.season_stats import (
+    _create_pitcher_arsenal_stats,
+    build_league_pa_outcome_stats,
     _create_batter_foul_contact_stats,
     _create_batter_in_play_contact_stats,
     _create_batter_pa_outcome_stats,
@@ -55,6 +57,103 @@ def test_contact_quality_stats_returns_pitcher_id_and_game_season_as_columns():
 
     assert 'pitcher_id' in result.columns
     assert 'game_season' in result.columns
+
+
+def _make_arsenal_pbp():
+    """2 pitch types (FF/SL), 2 pitches each, for pitcher '1' in 2023.
+    release_pos_x is the SAME within each type but differs 1.0 vs 1.2
+    between types, so its std is driven purely by the 2 distinct values,
+    hand-computable independent of pitch_type_entropy's own already-tested
+    math (kept out of this fixture's expected values). plate_x/
+    plate_z_normalized differ cleanly between FF and SL so the
+    crossing-spread (std of per-pitch-type means) is hand-computable too."""
+
+    return pd.DataFrame([
+        {'pitcher_id': '1', 'game_season': 2023, 'pitch_type': 'FF',
+         'release_pos_x': 1.0, 'release_pos_y': 5.0, 'release_pos_z': 6.0,
+         'plate_x': 0.0, 'plate_z_normalized': 0.5},
+        {'pitcher_id': '1', 'game_season': 2023, 'pitch_type': 'FF',
+         'release_pos_x': 1.2, 'release_pos_y': 5.0, 'release_pos_z': 6.0,
+         'plate_x': 0.2, 'plate_z_normalized': 0.5},
+        {'pitcher_id': '1', 'game_season': 2023, 'pitch_type': 'SL',
+         'release_pos_x': 1.0, 'release_pos_y': 5.0, 'release_pos_z': 6.0,
+         'plate_x': -0.5, 'plate_z_normalized': 0.0},
+        {'pitcher_id': '1', 'game_season': 2023, 'pitch_type': 'SL',
+         'release_pos_x': 1.2, 'release_pos_y': 5.0, 'release_pos_z': 6.0,
+         'plate_x': -0.3, 'plate_z_normalized': 0.0},
+    ])
+
+
+def test_create_pitcher_arsenal_stats_release_pos_std_reflects_variance_across_all_pitches():
+    """release_pos_x takes values [1.0, 1.2, 1.0, 1.2] across the 4 pitches —
+    sample std (ddof=1): mean=1.1, sum of squared deviations = 4*0.01=0.04,
+    variance = 0.04/3, std = sqrt(0.04/3) ~= 0.11547."""
+
+    result = _create_pitcher_arsenal_stats(_make_arsenal_pbp())
+    row = result.iloc[0]
+
+    assert row['pitcher_season_arsenal_release_pos_x_std'] == pytest.approx(0.11547, abs=1e-4)
+
+
+def test_create_pitcher_arsenal_stats_crossing_spread_is_std_of_per_pitch_type_means():
+    """FF's mean plate_x is 0.1, SL's is -0.4 — crossing spread is the
+    sample std (ddof=1) of those two per-pitch-type means: mean=-0.15,
+    deviations +-0.25, variance=0.125, std=sqrt(0.125) ~= 0.35355.
+    Same computation for plate_z_normalized: FF mean=0.5, SL mean=0.0,
+    same spread by construction."""
+
+    result = _create_pitcher_arsenal_stats(_make_arsenal_pbp())
+    row = result.iloc[0]
+
+    assert row['pitcher_season_arsenal_plate_x_crossing_spread'] == pytest.approx(0.35355, abs=1e-4)
+    assert row['pitcher_season_arsenal_plate_z_normalized_crossing_spread'] == pytest.approx(0.35355, abs=1e-4)
+
+
+def test_create_pitcher_arsenal_stats_returns_entity_and_season_as_columns():
+    result = _create_pitcher_arsenal_stats(_make_arsenal_pbp())
+
+    assert 'pitcher_id' in result.columns
+    assert 'game_season' in result.columns
+
+
+def _make_league_pa_outcome_pbp():
+    """5 PAs (last-pitch rows only matter — pitch_number=1 for all, so every
+    row is its own PA's last pitch), pooled across 2 different pitchers, all
+    game_season 2023: 1 strikeout, 1 walk, 1 single, 1 home run, 1 groundout.
+    Rates are hand-computable directly: 1/5 = 0.2 each for single/hr/walk/
+    strikeout, xbh_rate = hr's 1/5 = 0.2 (HR counts as xbh too), hbp_rate = 0."""
+
+    return pd.DataFrame([
+        {'pitcher_id': '1', 'gamepk': '1', 'play_id': 1, 'pitch_number': 1, 'game_season': 2023, 'play_result': 'Strikeout'},
+        {'pitcher_id': '1', 'gamepk': '1', 'play_id': 2, 'pitch_number': 1, 'game_season': 2023, 'play_result': 'Walk'},
+        {'pitcher_id': '2', 'gamepk': '2', 'play_id': 1, 'pitch_number': 1, 'game_season': 2023, 'play_result': 'Single'},
+        {'pitcher_id': '2', 'gamepk': '2', 'play_id': 2, 'pitch_number': 1, 'game_season': 2023, 'play_result': 'Home Run'},
+        {'pitcher_id': '2', 'gamepk': '2', 'play_id': 3, 'pitch_number': 1, 'game_season': 2023, 'play_result': 'Groundout'},
+    ])
+
+
+def test_build_league_pa_outcome_stats_pools_across_all_pitchers_no_entity_split():
+    """Same point-in-time shift as every other season-level table in this
+    file (_shift_to_last_season) — game_season 2023's rates land under
+    game_season=2024 with 'last_season_' column names, so this table joins
+    onto NEXT season's games rather than leaking same-season data."""
+
+    result = build_league_pa_outcome_stats(_make_league_pa_outcome_pbp())
+    row = result.iloc[0]
+
+    assert row['game_season'] == 2024
+    assert row['league_last_season_pa_strikeout_rate'] == pytest.approx(0.2)
+    assert row['league_last_season_pa_walk_rate'] == pytest.approx(0.2)
+    assert row['league_last_season_pa_single_rate'] == pytest.approx(0.2)
+    assert row['league_last_season_pa_hr_rate'] == pytest.approx(0.2)
+    assert row['league_last_season_pa_xbh_rate'] == pytest.approx(0.2)
+    assert row['league_last_season_pa_hbp_rate'] == pytest.approx(0.0)
+
+
+def test_build_league_pa_outcome_stats_has_no_per_pitcher_id_columns():
+    result = build_league_pa_outcome_stats(_make_league_pa_outcome_pbp())
+
+    assert 'pitcher_id' not in result.columns
 
 
 def _make_pitcher_boxscore_row(**overrides):
@@ -728,6 +827,7 @@ def _make_full_pitcher_pbp():
          'start_speed': 95.0, 'end_speed': 87.0, 'perceived_velo': 97.0, 'spin_rate': 2200.0,
          'movement_magnitude': 8.0, 'pfx_z': 10.0, 'extension': 6.5, 'speed_retention': 0.9,
          'plate_x': 0.1, 'plate_z_normalized': 0.5, 'zone': 5,
+         'pitch_type': 'FF', 'release_pos_x': 1.0, 'release_pos_y': 54.0, 'release_pos_z': 6.0,
          'play_result': 'Strikeout', 'count_balls': 0, 'count_strikes': 2,
          'inning': 1, 'count_outs': 1, 'is_pitch': True,
          'hardness': None, 'trajectory': None, 'launch_speed': np.nan, 'launch_angle': np.nan},
@@ -739,6 +839,7 @@ def _make_full_pitcher_pbp():
          'start_speed': 93.0, 'end_speed': 85.0, 'perceived_velo': 95.0, 'spin_rate': 2100.0,
          'movement_magnitude': 7.0, 'pfx_z': 9.0, 'extension': 6.2, 'speed_retention': 0.91,
          'plate_x': -0.2, 'plate_z_normalized': 0.4, 'zone': 4,
+         'pitch_type': 'SL', 'release_pos_x': 1.2, 'release_pos_y': 54.0, 'release_pos_z': 6.0,
          'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1,
          'inning': 1, 'count_outs': 1, 'is_pitch': True,
          'hardness': 'Hard', 'trajectory': 'Line Drive', 'launch_speed': 100.0, 'launch_angle': 15.0},
@@ -750,6 +851,7 @@ def _make_full_pitcher_pbp():
          'start_speed': 91.0, 'end_speed': 83.0, 'perceived_velo': 93.0, 'spin_rate': 2000.0,
          'movement_magnitude': 6.0, 'pfx_z': 8.0, 'extension': 6.0, 'speed_retention': 0.9,
          'plate_x': 1.0, 'plate_z_normalized': 1.5, 'zone': 12,
+         'pitch_type': 'FF', 'release_pos_x': 1.0, 'release_pos_y': 54.0, 'release_pos_z': 6.0,
          'play_result': 'Walk', 'count_balls': 4, 'count_strikes': 1,
          'inning': 9, 'count_outs': 1, 'is_pitch': True,
          'hardness': None, 'trajectory': None, 'launch_speed': np.nan, 'launch_angle': np.nan},
@@ -772,6 +874,7 @@ def _make_bullpen_team_pool_pbp():
          'start_speed': 95.0, 'end_speed': 87.0, 'perceived_velo': 97.0, 'spin_rate': 2200.0,
          'movement_magnitude': 8.0, 'pfx_z': 10.0, 'extension': 6.5, 'speed_retention': 0.9,
          'plate_x': 0.1, 'plate_z_normalized': 0.5, 'zone': 5,
+         'pitch_type': 'FF', 'release_pos_x': 1.0, 'release_pos_y': 54.0, 'release_pos_z': 6.0,
          'play_result': 'Strikeout', 'count_balls': 0, 'count_strikes': 2,
          'inning': 1, 'count_outs': 1, 'is_pitch': True,
          'hardness': None, 'trajectory': None, 'launch_speed': np.nan, 'launch_angle': np.nan},
@@ -783,6 +886,7 @@ def _make_bullpen_team_pool_pbp():
          'start_speed': 91.0, 'end_speed': 83.0, 'perceived_velo': 93.0, 'spin_rate': 2000.0,
          'movement_magnitude': 6.0, 'pfx_z': 8.0, 'extension': 6.0, 'speed_retention': 0.9,
          'plate_x': 1.0, 'plate_z_normalized': 1.5, 'zone': 12,
+         'pitch_type': 'FF', 'release_pos_x': 1.1, 'release_pos_y': 54.0, 'release_pos_z': 6.0,
          'play_result': 'Walk', 'count_balls': 4, 'count_strikes': 1,
          'inning': 9, 'count_outs': 1, 'is_pitch': True,
          'hardness': None, 'trajectory': None, 'launch_speed': np.nan, 'launch_angle': np.nan},
@@ -794,6 +898,7 @@ def _make_bullpen_team_pool_pbp():
          'start_speed': 90.0, 'end_speed': 82.0, 'perceived_velo': 92.0, 'spin_rate': 1950.0,
          'movement_magnitude': 5.0, 'pfx_z': 7.0, 'extension': 5.8, 'speed_retention': 0.91,
          'plate_x': -0.1, 'plate_z_normalized': 0.4, 'zone': 4,
+         'pitch_type': 'SL', 'release_pos_x': 1.2, 'release_pos_y': 54.0, 'release_pos_z': 6.0,
          'play_result': 'Single', 'count_balls': 1, 'count_strikes': 1,
          'inning': 9, 'count_outs': 2, 'is_pitch': True,
          'hardness': 'Hard', 'trajectory': 'Line Drive', 'launch_speed': 98.0, 'launch_angle': 12.0},

@@ -39,56 +39,60 @@ from models.hit_predictor.processing.features import rolling_stats
 from models.hit_predictor.processing.features import park_factors
 from models.hit_predictor.processing.features import expected_role
 from models.hit_predictor.processing.features import game_context
+from models.hit_predictor.processing.features import tier1_feats
 
 
 STAGE = Path(__file__).parent
 
 # ---------------------------------------------------------------------------- #
-#                                    v4 SUMMARY                                #
+#                                    v5 SUMMARY                                #
 # ---------------------------------------------------------------------------- #
-# Same base pipeline as v2_rolling_features (season + rolling batter/pitcher stats,
-# park factors, TTO splits), PLUS everything built in the "game context" work this
-# session:
+# Identical base pipeline to v4_pitcher_expected_adj (inning-based pitcher-role
+# gating + game-context features) PLUS 4 of the 12 "Tier 1 — build now, no new
+# ingestion" candidates from research/feature_glossary_gap_analysis.md (the
+# other 8, plus "effective/perceived velocity" — already implemented as
+# perceived_velo/speed_retention since before this experiment — are out of
+# scope for this pass; see ROADMAP.md backlog item 3):
 #
-#   1. Pitcher-role gating is now INNING-BASED, not PA-position-based. v2/v3 (and
-#      the still-untouched season_stats.py/rolling_stats.py builders) gate every
-#      pitcher-side merge on expected_pitcher_role/expected_pitcher_key_id, produced
-#      by comparing a batter's estimated position in the lineup against the
-#      starter's average BATTERS FACED per start (expected_role.assign_expected_
-#      pitcher_role). v4 replaces that call with assign_expected_pitcher_role_by_inning:
-#      the batter's estimated lineup position is converted into an estimated INNING
-#      (a fixed avg-team-PAs-per-inning approximation), compared against the
-#      starter's expected_start_innings — itself a shrinkage blend of his own
-#      last-season baseline and this-season rolling average, not a single static
-#      number. See processing/features/expected_role.py and game_context.py's
-#      docstrings for the full reasoning; this is a genuinely different (and IMO
-#      more principled) estimate, not a proven-better one yet — that's what this
-#      experiment is for.
+#   1. Arsenal entropy + pitch-tunneling proxies — season_stats.py's new
+#      _create_pitcher_arsenal_stats, wired into build_pbp_pitcher_feats's
+#      existing merge chain (so it inherits sp/bullpen role-tagging for free,
+#      same as every other pitcher pbp stat). Three ingredients:
+#        - pitcher_last_season_arsenal_entropy — Shannon entropy of pitch-type
+#          mix (tier1_feats.pitch_type_entropy); low entropy = predictable arsenal.
+#        - pitcher_last_season_arsenal_release_pos_{x,y,z}_std — release-point
+#          consistency ACROSS all pitch types.
+#        - pitcher_last_season_arsenal_plate_{x,z_normalized}_crossing_spread —
+#          how differentiated each pitch type's average end location is.
+#      Tight release + wide crossing spread is the actual tunneling signal
+#      (looks the same out of the hand, ends up in different places); either
+#      ingredient alone is weaker on its own, left for the model to combine.
 #
-#   2. New game-context features, merged onto model_df same as park_factors already
-#      is (via join keys, no grain changes needed):
-#        - game_dt_* — calendar/time-of-day decomposition of game_datetime
-#          (fastai add_datepart style: year/month/week/day/dayofweek/dayofyear,
-#          month/quarter/year start-end flags, hour, minute). No day/night flag —
-#          not in raw ingestion, and a UTC-hour heuristic would need a venue-
-#          timezone lookup we don't have; deferred (see FEATURE_GLOSSARY.md).
-#        - is_doubleheader — ground-truth from raw schedule's 'doubleheader' code
-#          (not yet in processed_data/games/schedule's SCHEDULE_COLUMNS, so pulled
-#          via a light, column-pruned raw read here rather than a full historical
-#          reprocessing job).
-#        - batting_team_roll_*/pitching_team_roll_* — team win/loss record and
-#          run differential, season-to-date AND trailing-SHORT_WINDOW_GAMES, for
-#          BOTH the batting team's and the pitching team's perspective (a team's
-#          own record/form is a different signal depending on whether they're the
-#          ones at bat or on the mound in this PA).
-#        - batting_team_days_since_last_game/pitching_team_days_since_last_game —
-#          rest days for each side.
+#   2. Extended log5 matchup — tier1_feats.build_log5_matchup_features:
+#      log5_matchup_{outcome} = batter_rate * pitcher_rate / league_rate, for
+#      outcome in {single, xbh, hr, walk, hbp, strikeout}. Needed 2 new merges
+#      not present in v2/v4: season_stats.build_pbp_batter_feats(pbp) (batter-
+#      side PA-outcome rates — v2/v4 only ever merged boxscore-derived batter
+#      stats, never the pbp-derived rate table) and the new
+#      season_stats.build_league_pa_outcome_stats(pbp) (unconditional
+#      league-wide per-season rates — the existing league tables are all
+#      conditioned on a hand/TTO bucket). All three merges are point-in-time
+#      shifted the same as every other season table here, hence the
+#      *_last_season_pa_* prefixes passed to build_log5_matchup_features.
 #
-# Everything else (batter/pitcher season+rolling stats, park factors, TTO splits,
-# missing-indicator/impute/encode, model training, eval, MLflow logging) is
-# unchanged from v2 — this experiment isolates the effect of (1) the gating swap
-# and (2) the new game-context features together, against v2's raw-features
-# baseline (see mlflow run history / prior session for v2's val metrics).
+#   3. Velocity-decline trend — tier1_feats.build_velocity_decline_trend_features,
+#      a narrow (start_speed/spin_rate only) application of interaction_feats.py's
+#      existing trend_ratio/trend_direction machinery over already-merged
+#      pitcher_roll_last{N}g_stuff_start_speed_mean vs pitcher_roll_season_
+#      stuff_start_speed_mean pairs (same for spin_rate). Deliberately NOT the
+#      blanket "every rolling stat pair" approach v3_interaction_feats/train.py
+#      tried and found measurably hurt val metrics — this targets specifically
+#      the fatigue/decline hypothesis the literature backs, not a re-run of v3's
+#      already-negative broad result.
+#
+# Everything else — pitcher-role gating, game-context features, model training,
+# eval, MLflow logging — is unchanged from v4. This experiment isolates the
+# effect of the 4 Tier 1 additions above against v4's baseline.
 
 # Short rolling window size, in games. Change this one constant to try a different
 # recent-form window — it flows through every build_*_rolling_stats(window=...) call below.
@@ -229,11 +233,11 @@ pbp = pipeline.build_pbp_features(pbp, schedule, player_info)
 pa_outcome = pipeline.create_pa_outcome(pbp, batter_boxscore, game_info, schedule)
 
 # ---------------------------------------------------------------------------- #
-#                    INNING-BASED EXPECTED PITCHER ROLE (v4 change #1)         #
+#                         INNING-BASED EXPECTED PITCHER ROLE                   #
 # ---------------------------------------------------------------------------- #
-# Replaces v2/v3's assign_expected_pitcher_role (batters-faced-based) with
-# assign_expected_pitcher_role_by_inning (innings-based) — see the v4 SUMMARY
-# comment at the top of this file.
+# Unchanged from v4 — see v4_pitcher_expected_adj/train.py for the full
+# rationale of assign_expected_pitcher_role_by_inning vs the older
+# batters-faced-based estimate.
 
 # Last-season fixed baseline (avg IP/start) + league-wide fallback — same
 # fallback-chain role as season_stats.build_pitcher_start_depth_stats, but
@@ -253,6 +257,14 @@ expected_start_innings = game_context.build_expected_start_innings(
 pa_outcome = expected_role.assign_expected_pitcher_role_by_inning(pa_outcome, expected_start_innings)
 
 batter_season_stats = season_stats.build_batter_stats(batter_boxscore).rename(columns={'personId': 'batter_id'})
+
+# Tier 1 change #2 (log5 matchup, part 1/3): batter-side PA-outcome rates
+# (single_rate/xbh_rate/hr_rate/walk_rate/hbp_rate/strikeout_rate) — v2/v4
+# never merged this pbp-derived table, only the boxscore-derived ba/slg/iso/
+# babip stats above. batter_id is already the correct join key name, no
+# rename needed (unlike the pitcher-side role-key rename dance below).
+batter_pbp_season_stats = season_stats.build_pbp_batter_feats(pbp)
+
 # Role-tagged AND role-pooled: a swingman (starts some games, relieves others in the same
 # season) gets separate 'sp'/'bullpen' rows rather than one blended aggregate, and the
 # bullpen half is pooled by team (not kept per individual pitcher_id) since a specific
@@ -261,13 +273,19 @@ batter_season_stats = season_stats.build_batter_stats(batter_boxscore).rename(co
 # join onto pa_outcome's new expected-role columns uniformly regardless of role — these
 # tables are still built from REALIZED pitcher_role internally (a pitcher's own aggregate
 # should reflect his true starts, not a guess), only the column names used to JOIN them
-# onto model_df change.
+# onto model_df change. This table now also carries arsenal_entropy/release_pos_*_std/
+# plate_*_crossing_spread (Tier 1 change #1) via season_stats.build_pbp_pitcher_feats's
+# updated merge chain — inherited automatically, no separate merge needed.
 pitcher_role_season_stats = season_stats.build_pbp_pitcher_feats_all_roles(pbp).rename(
     columns={'pitcher_key_id': 'expected_pitcher_key_id', 'pitcher_role': 'expected_pitcher_role'}
 )
 pitcher_season_stats = season_stats.build_pitcher_stats_all_roles(pitcher_boxscore, pbp).rename(
     columns={'pitcher_key_id': 'expected_pitcher_key_id', 'pitcher_role': 'expected_pitcher_role'}
 )
+
+# Tier 1 change #2 (log5 matchup, part 2/3): unconditional league-wide PA-outcome
+# rates — no entity or context-bucket split, unlike league_tto_stats below.
+league_pa_outcome_stats = season_stats.build_league_pa_outcome_stats(pbp)
 
 # rolling season (expanding, resets each season) + rolling short (trailing
 # SHORT_WINDOW_GAMES, carries across season boundaries) — same stat categories as
@@ -285,7 +303,9 @@ batter_rolling_short_stats = (
 
 ROLE_KEY_RENAME = {'pitcher_key_id': 'expected_pitcher_key_id', 'pitcher_role': 'expected_pitcher_role'}
 
-# Role-tagged AND role-pooled, same rationale as pitcher_season_stats above.
+# Role-tagged AND role-pooled, same rationale as pitcher_season_stats above. Also
+# carries stuff_start_speed_mean/stuff_spin_rate_mean, the pairs Tier 1 change #3
+# (velocity-decline trend) needs both a short and season window of.
 pitcher_rolling_season_stats = rolling_stats.build_pitcher_rolling_stats_all_roles(
     pitcher_boxscore, pbp, window='season'
 ).rename(columns=ROLE_KEY_RENAME)
@@ -328,6 +348,9 @@ league_tto_stats = season_stats.build_league_times_through_order_stats(pbp)
 model_df = pa_outcome.merge(
     batter_season_stats, on=['game_season', 'batter_id'], how='left'
 )
+model_df = model_df.merge(
+    batter_pbp_season_stats, on=['game_season', 'batter_id'], how='left'
+)
 # expected_pitcher_key_id + expected_pitcher_role join as the key: pa_outcome carries each
 # PA's pre-game-estimated role and resolved key (sp -> starting_pitcher_id, bullpen ->
 # pitcher_team_id), so this picks up exactly the sp/team-pooled-bullpen row matching that
@@ -346,8 +369,9 @@ model_df = model_df.merge(
 model_df = model_df.merge(
     pitcher_tto_stats, on=['game_season', 'expected_pitcher_key_id', 'expected_pitcher_role'], how='left'
 )
-# Population-level table — no entity key, joins on game_season alone.
+# Population-level tables — no entity key, join on game_season alone.
 model_df = model_df.merge(league_tto_stats, on='game_season', how='left')
+model_df = model_df.merge(league_pa_outcome_stats, on='game_season', how='left')
 
 for rolling_df in (batter_rolling_season_stats, batter_rolling_short_stats):
     rolling_df = rolling_df.drop(columns=['game_date', 'game_season'])
@@ -372,7 +396,7 @@ model_df.loc[model_df['expected_pitcher_role'] == 'bullpen', 'pitcher_throw_hand
 
 
 # ---------------------------------------------------------------------------- #
-#                    NEW GAME-CONTEXT FEATURES (v4 change #2)                  #
+#                           GAME-CONTEXT FEATURES (from v4)                    #
 # ---------------------------------------------------------------------------- #
 
 # ------------------------------ DATETIME FEATURES ---------------------------- #
@@ -411,6 +435,26 @@ for side, team_id_col in (('batting', 'batter_team_id'), ('pitching', 'pitcher_t
         c: f'{side}_{c}' for c in side_context.columns if c not in (team_id_col, 'gamepk')
     })
     model_df = model_df.merge(side_context, on=[team_id_col, 'gamepk'], how='left')
+
+
+# ---------------------------------------------------------------------------- #
+#                        TIER 1 FEATURES (v5 changes)                          #
+# ---------------------------------------------------------------------------- #
+# Arsenal entropy + tunnel proxies already rode in above via pitcher_role_season_
+# stats' merge (no separate step needed). Log5 matchup and velocity-decline trend
+# are pure formula/combination steps on the now-fully-assembled model_df.
+
+# Prefixes reflect the _shift_to_last_season rename every season-level table here
+# goes through (season_ -> last_season_) — batter_pbp_season_stats,
+# pitcher_role_season_stats, and league_pa_outcome_stats all shifted the same way.
+model_df = tier1_feats.build_log5_matchup_features(
+    model_df,
+    batter_prefix='batter_last_season_pa_',
+    pitcher_prefix='pitcher_last_season_pa_',
+    league_prefix='league_last_season_pa_',
+)
+
+model_df = tier1_feats.build_velocity_decline_trend_features(model_df)
 
 
 # ---------------------------------------------------------------------------- #
@@ -506,7 +550,7 @@ GAME_MIN_N = 200
 CALIB_FIT_FRAC = 0.5
 CALIB_MIN_N = GAME_MIN_N // 2
 
-PLOT_DIR = BASE_DIR / "plots" / "v4_pitcher_expected_adj"
+PLOT_DIR = BASE_DIR / "plots" / "v5_tier1_features"
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 BASELINE_RESULTS_MD = BASE_DIR / "baseline_results.md"
@@ -526,10 +570,7 @@ print(f"Random Forest OOB score: {fitted_models['Random Forest'].oob_score_:.4f}
       "  (sanity check against val log loss below)")
 
 # Sanity check: how often does the new inning-based estimate agree with the
-# realized (post-hoc) pitcher_role? Same diagnostic role as the equivalent
-# check implicitly available in v2/v3 via the retained-but-unused pitcher_role
-# column — surfaced explicitly here since v4's whole point is testing whether
-# this estimate is any good.
+# realized (post-hoc) pitcher_role? Same diagnostic role as v4.
 agreement_rate = (model_df['expected_pitcher_role'] == model_df['pitcher_role']).mean()
 print(f"expected_pitcher_role (inning-based) vs realized pitcher_role agreement: {agreement_rate:.4f}")
 
@@ -631,5 +672,3 @@ for name, model in fitted_models.items():
         run_id=run_id,
         artifact_paths=artifact_paths,
     )
-
-

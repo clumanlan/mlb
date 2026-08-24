@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from .tier1_feats import pitch_type_entropy
+
 # Stat definitions, formulas, and "why this stat" rationale: see FEATURE_GLOSSARY.md
 # (src/models/hit_predictor/FEATURE_GLOSSARY.md) — section 5 has a feature-name ->
 # function lookup table. Keep definitions there, not duplicated in this file.
@@ -472,6 +474,60 @@ def _create_pitcher_contact_quality_stats(pbp_role, entity_col: str = 'pitcher_i
 
     return _prefix_stat_cols(df, prefix='pitcher_season_contact_', key_cols=group_cols)
 
+# --------------------------- PITCH-TUNNELING / ARSENAL PROXIES (Tier 1) --------------------------- #
+# Two ingredients of "how hard is this pitcher's arsenal to read pre-swing":
+#   - arsenal_entropy: Shannon entropy of pitch-type mix — a low-entropy (predictable)
+#     pitcher is measurably easier to sit on.
+#   - release_pos_{x,y,z}_std: release-point consistency ACROSS pitch types — tight
+#     tunneling means every pitch looks the same out of the hand.
+#   - plate_{x,z_normalized}_crossing_spread: how much pitch types differ in WHERE they
+#     end up (std of each pitch type's own mean plate location) — tight release +
+#     wide crossing spread is the actual tunneling signal (looks the same, ends up
+#     different); either ingredient alone is a weaker proxy.
+# See FEATURE_GLOSSARY.md / research/feature_glossary_gap_analysis.md.
+
+def _create_pitcher_arsenal_stats(pbp_role, entity_col: str = 'pitcher_id', extra_group_cols: list[str] | None = None):
+
+    group_cols = [entity_col, 'game_season'] + (extra_group_cols or [])
+
+    entropy_release = (
+        pbp_role
+        .groupby(group_cols)
+        .agg(
+            arsenal_entropy=('pitch_type', pitch_type_entropy),
+            release_pos_x_std=('release_pos_x', 'std'),
+            release_pos_y_std=('release_pos_y', 'std'),
+            release_pos_z_std=('release_pos_z', 'std'),
+        )
+        .reset_index()
+    )
+
+    # Two-level groupby, can't be a single .agg() call like above: first collapse to
+    # one row per (entity, season, pitch_type) mean location, THEN take the std of
+    # those per-pitch-type means — the "how differentiated are this pitcher's pitch
+    # types' end locations" signal, distinct from within-pitch-type location variance.
+    per_pitch_type_means = (
+        pbp_role
+        .groupby(group_cols + ['pitch_type'])[['plate_x', 'plate_z_normalized']]
+        .mean()
+        .reset_index()
+    )
+    crossing_spread = (
+        per_pitch_type_means
+        .groupby(group_cols)[['plate_x', 'plate_z_normalized']]
+        .std()
+        .reset_index()
+        .rename(columns={
+            'plate_x': 'plate_x_crossing_spread',
+            'plate_z_normalized': 'plate_z_normalized_crossing_spread',
+        })
+    )
+
+    df = entropy_release.merge(crossing_spread, on=group_cols, how='left')
+
+    return _prefix_stat_cols(df, prefix='pitcher_season_arsenal_', key_cols=group_cols)
+
+
 def build_pbp_pitcher_feats(pbp: pd.DataFrame, pitcher_role: str | None = None, entity_col: str = 'pitcher_id') -> pd.DataFrame:
 
     """Build pitcher pbp features.
@@ -495,6 +551,7 @@ def build_pbp_pitcher_feats(pbp: pd.DataFrame, pitcher_role: str | None = None, 
     pitcher_last_inning_stats = _create_pitcher_last_inning_stats(pbp, entity_col=entity_col)
     pitcher_pitch_count_stats = _create_pitcher_pitch_count_stats(pbp, entity_col=entity_col)
     pitcher_contact_quality_stats = _create_pitcher_contact_quality_stats(pbp, entity_col=entity_col)
+    pitcher_arsenal_stats = _create_pitcher_arsenal_stats(pbp, entity_col=entity_col)
 
     df = (
         pitcher_stuff_command_stats
@@ -502,6 +559,7 @@ def build_pbp_pitcher_feats(pbp: pd.DataFrame, pitcher_role: str | None = None, 
         .merge(pitcher_last_inning_stats, on=[entity_col,'game_season'], how='left')
         .merge(pitcher_pitch_count_stats,  on=[entity_col,'game_season'], how='left')
         .merge(pitcher_contact_quality_stats,  on=[entity_col,'game_season'], how='left')
+        .merge(pitcher_arsenal_stats,  on=[entity_col,'game_season'], how='left')
     )
 
     return _shift_to_last_season(df)
@@ -637,6 +695,40 @@ def build_pbp_pitcher_feats_by_times_through_order(pbp: pd.DataFrame) -> pd.Data
     df = _shift_to_last_season(df)
 
     return df.rename(columns={'pitcher_id': 'pitcher_key_id'}).assign(pitcher_role='sp')
+
+
+# --------------------------- LEAGUE-WIDE PA-OUTCOME CONTEXT TABLE (Tier 1: log5 matchup) --------- #
+# Unconditional per-season league PA-outcome rates — no entity or context-bucket split, unlike
+# build_league_times_through_order_stats/build_league_handedness_stats below. This is the
+# denominator ingredient for the extended log5 matchup formula (tier1_feats.py's
+# build_log5_matchup_features): log5_outcome = batter_rate * pitcher_rate / league_rate.
+
+def build_league_pa_outcome_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    key_cols = ['game_season']
+
+    last_pitch_pbp = (
+        pbp[pbp['pitch_number'] == pbp.groupby(['gamepk', 'play_id'])['pitch_number'].transform('max')]
+        .reset_index(drop=True)
+    )
+
+    df = (
+        last_pitch_pbp
+        .groupby(key_cols)
+        .agg(
+            strikeout_rate=('play_result', lambda x: x.isin({"Strikeout", "Strikeout Double Play"}).mean()),
+            walk_rate=('play_result', lambda x: x.isin({"Walk", "Intent Walk"}).mean()),
+            hbp_rate=('play_result', lambda x: x.eq("Hit By Pitch").mean()),
+            single_rate=('play_result', lambda x: x.eq("Single").mean()),
+            xbh_rate=('play_result', lambda x: x.isin({"Double", "Triple", "Home Run"}).mean()),
+            hr_rate=('play_result', lambda x: x.eq("Home Run").mean()),
+        )
+        .reset_index()
+    )
+
+    df = _prefix_stat_cols(df, prefix='league_season_pa_', key_cols=key_cols)
+
+    return _shift_to_last_season(df)
 
 
 # --------------------------- LEAGUE-WIDE TIMES THROUGH THE ORDER CONTEXT TABLE (phase 2) ------- #

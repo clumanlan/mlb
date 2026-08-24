@@ -1,0 +1,43 @@
+# Baseline config — n_pa_predictor
+# Run: python run.py (from baseline/model/, or wherever it's invoked from — reads
+# this file via BASE_DIR relative to its own location)
+bucket: mlbdk
+region: us-east-2
+target_column: n_pa
+task_type: regression
+date_column: game_date
+time_based_split: true
+test_season: 2025   # held-out — never evaluated during development; final eval only in train.py
+val_season: 2024    # iterate against this during development
+metric: mae
+secondary_metric: rmse
+model_name: n_pa_predictor
+
+# Same split as hit_predictor/config.yaml — this model reuses several of its
+# feature builders (game_context, season_stats) and should stay comparable.
+train_seasons:
+  - 2017
+  - 2018
+  - 2019
+  - 2022
+  - 2023
+  - 2024
+  - 2025
+
+# Seasons used to compute last-season starter-IP baseline (one season behind
+# each train season)
+feature_seasons:
+  - 2016
+  - 2017
+  - 2018
+  - 2019
+  - 2022
+  - 2023
+  - 2024
+
+drop_columns:
+  - gamepk
+  - batter_id
+  - batter_team_id
+  - opp_starting_pitcher_id
+  - game_date

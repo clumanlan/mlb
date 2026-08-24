@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en" data-theme="luxury">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>This Turn's Changes</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex) > * { min-width: 0; }
+  :where(p, h1, h2, h3, h4, li, td, th, .badge) { overflow-wrap: anywhere; }
+  body { background: var(--color-base-100); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body class="min-h-screen bg-base-100 text-base-content">
+<main class="mx-auto max-w-4xl px-6 py-10 lg:px-10 lg:py-14 space-y-10">
+
+  <section class="space-y-3">
+    <div class="badge badge-soft badge-primary">session summary</div>
+    <h1 class="text-3xl lg:text-4xl font-bold">This Turn's Changes</h1>
+    <p class="text-base-content/70 max-w-2xl">
+      The Stop hook flagged ~1,327 changed lines in the working tree. Almost all of that predates this
+      conversation — the <span class="mono">n_pa_predictor</span> build-out and <span class="mono">hit_predictor</span>
+      experiment edits were already sitting uncommitted when this session started. This conversation's
+      actual footprint is three files.
+    </p>
+  </section>
+
+  <section class="space-y-3">
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table">
+        <thead><tr><th>File</th><th>What changed</th><th>Size</th></tr></thead>
+        <tbody>
+          <tr class="align-top">
+            <td class="mono font-semibold">README.md<div class="badge badge-success badge-soft badge-sm mt-1">new</div></td>
+            <td class="text-sm text-base-content/80">Repo-root project pitch: the uncertainty-decomposition thesis, the mechanism-vs-luck dividing line, the sub-problem menu (low_pa built, K-prop/BB-prop/short-outing-bullpen-day candidates), pitcher-variance-control note, still-open batter-decomposition thread</td>
+            <td class="mono text-sm">56 lines</td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">ROADMAP.md<div class="badge badge-info badge-soft badge-sm mt-1">edited</div></td>
+            <td class="text-sm text-base-content/80">One new bullet in "Parked / explicitly deferred decisions": the "predict next occurrence" sequence-model idea (batter/pitcher embeddings), framed as a technique for the still-open batter decomposition, not a new low-noise target — leakage risk and recommended entry point noted</td>
+            <td class="mono text-sm">+1 line<span class="text-base-content/50"> (long-paragraph style)</span></td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">.lavish/readme-pitch.html<div class="badge badge-success badge-soft badge-sm mt-1">new</div></td>
+            <td class="text-sm text-base-content/80">Visual mockup of the README, reviewed and revised twice: reworded the pre-game callout, merged bullpen-day + starter-early-exit into one row, dropped the Current State section, added the pitcher-variance insight + still-open note</td>
+            <td class="mono text-sm">215 lines</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="space-y-3">
+    <div role="alert" class="alert alert-soft items-start">
+      <span><span class="font-semibold">Also updated, outside git:</span> the auto-memory file
+      <span class="mono">project_hit_predictor_n_pa.md</span> — two additions capturing the
+      uncertainty-decomposition strategy shift and the pitcher-variance-control framing, so future
+      sessions pick this reasoning back up without re-deriving it.</span>
+    </div>
+    <div role="alert" class="alert alert-soft alert-warning items-start">
+      <span><span class="font-semibold">Not summarized here:</span> the pre-existing uncommitted diff
+      (<span class="mono">n_pa_predictor/</span> build-out, <span class="mono">hit_predictor</span>
+      experiment/test edits, ~1,317 lines) — none of it was touched or authored in this conversation, so
+      describing it here would be guessing at intent this session doesn't have.</span>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

@@ -1,10 +1,11 @@
 """
 utils/mlflow_logging.py
 
-Turns the dict returned by eval.py's evaluate_hit_predictor() into an MLflow
-run. eval.py itself stays MLflow-agnostic — this module is the only place
-that imports mlflow, so swapping tracking backends later only touches here
-and the tracking-URI line at each call site.
+Generic MLflow run logger, copied from hit_predictor's utils/mlflow_logging.py
+(anchored to this file's own location, so it "just works" once copied into a
+new model directory — EXPERIMENT_NAME resolves to "n_pa_predictor" here).
+Not coupled to any hit_predictor-specific eval function; the caller builds
+its own metrics dict.
 """
 
 import subprocess
@@ -15,7 +16,7 @@ import mlflow
 
 # Anchored to this file's own location (utils/'s parent), not the caller's
 # __file__ — stable regardless of how deeply a training script is nested
-# under hit_predictor/.
+# under n_pa_predictor/.
 EXPERIMENT_NAME = Path(__file__).resolve().parent.parent.name
 
 
@@ -38,15 +39,8 @@ def get_git_sha():
 
 def create_run_id():
     """Open and immediately close a new MLflow run under this experiment,
-    returning its run_id.
-
-    Exists so a caller (e.g. a training script) can namespace filesystem
-    artifacts (plots, predictions) by the REAL run_id before any of those
-    files are written — log_evaluation_to_mlflow's own mlflow.start_run()
-    normally happens only after such paths are already built, which is too
-    late. Pass the returned id back to log_evaluation_to_mlflow's run_id
-    param to resume this exact run rather than opening a second one.
-    """
+    returning its run_id. Lets a caller namespace filesystem artifacts
+    (plots) by the REAL run_id before any of those files are written."""
     mlflow.set_experiment(get_experiment_name())
     with mlflow.start_run() as run:
         return run.info.run_id
@@ -54,25 +48,21 @@ def create_run_id():
 
 def log_evaluation_to_mlflow(metrics, params, tags, artifact_paths=None, run_id=None):
     """
-    Log one evaluate_hit_predictor() run to MLflow.
+    Log one evaluation run to MLflow.
 
     Parameters
     ----------
     metrics : dict
-        The dict returned by evaluate_hit_predictor(). Its `calibration_df`
-        entry (a DataFrame) is logged as a CSV artifact instead of a metric;
-        every other entry is logged as a scalar metric.
+        Scalar metrics to log. An optional `calibration_df` entry (a
+        DataFrame) is logged as a CSV artifact instead of a metric.
     params : dict
         Hyperparameters / run config to log.
     tags : dict
         Run tags (model_type, stage, target, val_season, git_sha, ...).
     artifact_paths : list of str, optional
-        Extra files to attach to the run (e.g. calibration curve PNG,
-        baseline_results.md). Caller decides which paths to include.
+        Extra files to attach to the run (plots, results.md).
     run_id : str, optional
-        An existing run to resume (e.g. from create_run_id()), rather than
-        opening a new one. Default None preserves the original behavior of
-        always creating a fresh run.
+        An existing run to resume (e.g. from create_run_id()).
     """
     mlflow.set_experiment(get_experiment_name())
     with mlflow.start_run(run_id=run_id):

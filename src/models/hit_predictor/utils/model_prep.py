@@ -8,6 +8,9 @@ processing/features/*.py (which computes the features themselves) since
 this module operates on an already-assembled model_df / feature matrix.
 """
 
+import json
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.impute import SimpleImputer
@@ -98,3 +101,26 @@ def plot_feature_importance(importances, save_path, top_n=20):
     plt.tight_layout()
     fig.savefig(save_path, dpi=120)
     plt.close(fig)
+
+
+def save_feature_importance_json(importances, save_path, method="native_gini"):
+    """Write the full (untruncated) feature importances to a JSON artifact.
+
+    Unlike plot_feature_importance (top_n-truncated, for human eyeballing),
+    this keeps every feature so a downstream run comparison can diff
+    importances across runs without losing the long tail. `method` is
+    recorded alongside the values so a future SHAP/permutation-importance
+    artifact can't be confused with this native .feature_importances_ one.
+
+    `importances` is a pd.Series indexed by feature name, same shape as
+    plot_feature_importance expects. Values are cast to plain float —
+    numpy float64 isn't JSON-serializable.
+    """
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "method": method,
+        "values": {str(k): float(v) for k, v in importances.items()},
+    }
+    save_path.write_text(json.dumps(payload, indent=2))
+    return save_path

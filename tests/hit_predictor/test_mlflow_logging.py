@@ -7,6 +7,7 @@ import pytest
 from mlflow.tracking import MlflowClient
 
 from models.hit_predictor.utils.mlflow_logging import (
+    create_run_id,
     get_experiment_name,
     get_git_sha,
     log_evaluation_to_mlflow,
@@ -121,6 +122,37 @@ def test_log_evaluation_logs_calibration_df_as_csv_artifact():
     round_tripped = pd.read_csv(local_path)
     assert list(round_tripped.columns) == list(calibration_df.columns)
     assert len(round_tripped) == len(calibration_df)
+
+
+def test_create_run_id_returns_id_and_leaves_no_active_run():
+    """create_run_id exists so a training script can namespace filesystem
+    artifacts (plots, predictions) by the real MLflow run_id BEFORE any
+    metrics are logged — it opens and immediately closes a run rather than
+    leaving one dangling for the caller to accidentally write into."""
+
+    run_id = create_run_id()
+
+    assert isinstance(run_id, str) and run_id
+    assert mlflow.active_run() is None
+    _, run = _latest_run(get_experiment_name())
+    assert run.info.run_id == run_id
+
+
+def test_log_evaluation_resumes_existing_run_when_run_id_given():
+    """Passing run_id must RESUME that exact run (so create_run_id's
+    pre-created run is the one that ends up with the metrics/artifacts),
+    not silently create a second run alongside it."""
+
+    pre_run_id = create_run_id()
+
+    log_evaluation_to_mlflow(
+        metrics={"brier": 0.1}, params={}, tags={"model_type": "xgboost"},
+        run_id=pre_run_id,
+    )
+
+    _, run = _latest_run(get_experiment_name())
+    assert run.info.run_id == pre_run_id
+    assert run.data.metrics["brier"] == pytest.approx(0.1)
 
 
 def test_log_evaluation_logs_additional_artifact_paths(tmp_path):

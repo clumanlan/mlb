@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 
 from models.hit_predictor.utils.model_prep import (
@@ -5,6 +7,7 @@ from models.hit_predictor.utils.model_prep import (
     get_columns_with_nulls,
     impute_and_encode,
     plot_feature_importance,
+    save_feature_importance_json,
 )
 
 
@@ -96,3 +99,22 @@ def test_plot_feature_importance_saves_file(tmp_path):
     plot_feature_importance(importances, save_path=save_path, top_n=2)
 
     assert save_path.exists()
+
+
+def test_save_feature_importance_json_writes_expected_schema(tmp_path):
+    """The JSON artifact keeps ALL features (not top_n-truncated like the
+    plot), tagged with the method used, so a downstream run comparison can
+    tell native-gini importances apart from a future SHAP/permutation
+    artifact without guessing from the filename alone."""
+
+    importances = pd.Series([0.5, 0.3, 0.2], index=["a", "b", "c"])
+    save_path = tmp_path / "fi.json"
+
+    save_feature_importance_json(importances, save_path=save_path)
+
+    assert save_path.exists()
+    payload = json.loads(save_path.read_text())
+    assert payload == {
+        "method": "native_gini",
+        "values": {"a": 0.5, "b": 0.3, "c": 0.2},
+    }
