@@ -305,6 +305,110 @@ def build_league_avg_start_ip(pitcher_start_ip_stats: pd.DataFrame) -> pd.DataFr
     return df[['game_season', 'league_last_season_avg_ip_per_start']]
 
 
+# --------------------------- PITCHER START PA (batters-faced estimate, k_predictor) --------------------------- #
+# "How many batters will this starter typically face" — feeds
+# game_context.build_expected_batters_faced, a SEPARATE 3-level pitcher -> team ->
+# league shrinkage cascade for k_predictor, deliberately NOT a retrofit of
+# build_expected_start_innings above (that one stays pitcher -> league, 2 levels —
+# n_pa_predictor and short_outing_predictor already have locked/frozen results built
+# on its existing behavior; changing it would require re-verifying both). pbp-derived
+# only, unlike the IP version: pitcher_boxscore has no 'batters faced' column, and pbp
+# already carries pitcher_role directly, so no role_lookup join is needed here.
+
+def _create_pitcher_start_pa_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+    """One row per (personId, game_season): average batters faced per SP
+    start, last-pitch-per-PA filtered same as _create_pitcher_pa_outcome_stats.
+    Also carries pitcher_team_id (whichever team most of that season's starts
+    belonged to, via 'last' — a mid-season trade is a rare edge case, same
+    simplification build_league_avg_start_depth-style fallbacks make
+    elsewhere in this file) so build_team_avg_start_pa below can group by it."""
+
+    sp_pbp = pbp[pbp['pitcher_role'] == 'sp']
+    last_pitch = sp_pbp[
+        sp_pbp['pitch_number'] == sp_pbp.groupby(['gamepk', 'play_id'])['pitch_number'].transform('max')
+    ]
+    per_start = (
+        last_pitch
+        .groupby(['pitcher_id', 'pitcher_team_id', 'gamepk', 'game_season'])
+        .agg(pa_total=('play_result', 'count'))
+        .reset_index()
+    )
+
+    df = (
+        per_start
+        .groupby(['pitcher_id', 'game_season'])
+        .agg(
+            avg_pa_per_start=('pa_total', 'mean'),
+            n_starts=('pa_total', 'count'),
+            pitcher_team_id=('pitcher_team_id', 'last'),
+        )
+        .reset_index()
+        .rename(columns={'pitcher_id': 'personId'})
+    )
+
+    return _prefix_stat_cols(df, prefix='pitcher_season_start_pa_', key_cols=['personId', 'game_season', 'pitcher_team_id'])
+
+
+def build_pitcher_start_pa_stats(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    return _shift_to_last_season(_create_pitcher_start_pa_stats(pbp))
+
+
+def build_league_avg_start_pa(pitcher_start_pa_stats: pd.DataFrame) -> pd.DataFrame:
+    """League-wide average batters faced/SP start last season, weighted by
+    each pitcher's own start count — same rationale as build_league_avg_start_ip.
+    The final safety net in build_expected_batters_faced's 3-level cascade."""
+
+    weighted = pitcher_start_pa_stats.assign(
+        _weighted_sum=lambda x: (
+            x['pitcher_last_season_start_pa_avg_pa_per_start']
+            * x['pitcher_last_season_start_pa_n_starts']
+        )
+    )
+
+    df = (
+        weighted
+        .groupby('game_season')
+        .agg(
+            _weighted_sum=('_weighted_sum', 'sum'),
+            _total_starts=('pitcher_last_season_start_pa_n_starts', 'sum'),
+        )
+        .reset_index()
+    )
+    df['league_last_season_avg_pa_per_start'] = df['_weighted_sum'] / df['_total_starts']
+
+    return df[['game_season', 'league_last_season_avg_pa_per_start']]
+
+
+def build_team_avg_start_pa(pitcher_start_pa_stats: pd.DataFrame) -> pd.DataFrame:
+    """Team-wide average batters faced/SP start last season, weighted by each
+    pitcher's own start count — the middle rung of build_expected_batters_faced's
+    3-level cascade, between a single pitcher's own (possibly thin) last-season
+    sample and the full league average. No equivalent exists for the IP cascade
+    above; this is new. A pitcher who changed teams mid-season is grouped under
+    whichever team _create_pitcher_start_pa_stats attributed his season to."""
+
+    weighted = pitcher_start_pa_stats.assign(
+        _weighted_sum=lambda x: (
+            x['pitcher_last_season_start_pa_avg_pa_per_start']
+            * x['pitcher_last_season_start_pa_n_starts']
+        )
+    )
+
+    df = (
+        weighted
+        .groupby(['pitcher_team_id', 'game_season'])
+        .agg(
+            _weighted_sum=('_weighted_sum', 'sum'),
+            _total_starts=('pitcher_last_season_start_pa_n_starts', 'sum'),
+        )
+        .reset_index()
+    )
+    df['team_last_season_avg_pa_per_start'] = df['_weighted_sum'] / df['_total_starts']
+
+    return df[['pitcher_team_id', 'game_season', 'team_last_season_avg_pa_per_start']]
+
+
 # --------------------------- PITCHER PBP SEASON STATS --------------------------- #
 # See FEATURE_GLOSSARY.md for stat definitions/rationale. Categories below:
 # - stuff: physical properties of a pitch

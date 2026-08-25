@@ -11,6 +11,8 @@ from models.hit_predictor.processing.features.game_context import (
     build_probable_starters,
     build_pitcher_start_ip_this_season,
     build_expected_start_innings,
+    build_pitcher_start_pa_this_season,
+    build_expected_batters_faced,
     build_pitcher_role_by_inning,
 )
 
@@ -468,6 +470,193 @@ def test_build_expected_start_innings_exposes_raw_components_not_just_the_blend(
         'pitcher_this_season_start_ip_avg_ip_per_start', 'pitcher_this_season_start_ip_starts_n',
         'league_last_season_avg_ip_per_start',
         'expected_start_innings_weight', 'expected_start_innings',
+    ]:
+        assert col in result.columns
+
+
+# --------------------------- PITCHER START PA (batters-faced estimate, k_predictor) --------------------------- #
+# k_predictor's own 3-level pitcher -> team -> league cascade, mirroring the pitcher ->
+# league IP cascade above in shape but pbp-derived (build_pitcher_start_pa_this_season
+# takes pbp only, no pitcher_boxscore) and with a team-level middle rung this file's
+# existing IP cascade deliberately does not have — see season_stats.py's own note on
+# why that one wasn't retrofitted instead.
+
+def _start_pa_this_season_pbp_row(pitcher_id='10', pitcher_team_id='T1', gamepk='g1',
+                                   game_date='2024-04-01', game_datetime='2024-04-01 19:00',
+                                   play_id=1, pitcher_role='sp', play_result='Single'):
+    return {
+        'pitcher_id': pitcher_id, 'pitcher_team_id': pitcher_team_id, 'gamepk': gamepk,
+        'game_date': pd.Timestamp(game_date), 'game_datetime': pd.Timestamp(game_datetime, tz='UTC'),
+        'game_season': 2024, 'pitcher_role': pitcher_role, 'play_id': play_id, 'pitch_number': 1,
+        'play_result': play_result,
+    }
+
+
+def _start_pa_this_season_pbp():
+    rows = []
+    # g1 on T1: 3 batters faced
+    for pid in range(1, 4):
+        rows.append(_start_pa_this_season_pbp_row(gamepk='g1', play_id=pid))
+    # g2 on T1: 5 batters faced
+    for pid in range(1, 6):
+        rows.append(_start_pa_this_season_pbp_row(
+            gamepk='g2', game_date='2024-04-06', game_datetime='2024-04-06 19:00', play_id=pid,
+        ))
+    return pd.DataFrame(rows)
+
+
+def test_build_pitcher_start_pa_this_season_rolls_forward_avg_and_start_count():
+    """One prior start (3 batters faced) rolled into start 2: avg = 3.0,
+    starts_n = 1 — mirrors the IP version's same rolling/shift(1) behavior,
+    just on pbp-derived batter counts."""
+
+    result = build_pitcher_start_pa_this_season(_start_pa_this_season_pbp())
+    row_g2 = result[result['gamepk'] == 'g2'].iloc[0]
+
+    assert row_g2['pitcher_this_season_start_pa_starts_n'] == 1
+    assert row_g2['pitcher_this_season_start_pa_avg_pa_per_start'] == pytest.approx(3.0)
+
+
+def test_build_pitcher_start_pa_this_season_first_start_is_nan():
+    """A pitcher's first start of the season has nothing prior this season
+    to average — must be NaN, not 0."""
+
+    result = build_pitcher_start_pa_this_season(_start_pa_this_season_pbp())
+    row_g1 = result[result['gamepk'] == 'g1'].iloc[0]
+
+    assert row_g1['pitcher_this_season_start_pa_starts_n'] == 0
+    assert pd.isna(row_g1['pitcher_this_season_start_pa_avg_pa_per_start'])
+
+
+def test_build_pitcher_start_pa_this_season_carries_pitchers_current_team_through_a_trade():
+    """New behavior the IP cascade's this-season table doesn't need: a
+    pitcher's pitcher_team_id must reflect whichever team he's on for THAT
+    start, not a single season-long team — so build_expected_batters_faced
+    can look up the team fallback for his CURRENT team (post-trade), not
+    whichever team his last-season stats belonged to."""
+
+    rows = [_start_pa_this_season_pbp_row(gamepk='g1', pitcher_team_id='T1', play_id=1)]
+    rows.append(_start_pa_this_season_pbp_row(
+        gamepk='g2', pitcher_team_id='T2', game_date='2024-05-01', game_datetime='2024-05-01 19:00', play_id=1,
+    ))
+
+    result = build_pitcher_start_pa_this_season(pd.DataFrame(rows))
+
+    assert result[result['gamepk'] == 'g1'].iloc[0]['pitcher_team_id'] == 'T1'
+    assert result[result['gamepk'] == 'g2'].iloc[0]['pitcher_team_id'] == 'T2'
+
+
+def _pa_this_season_row(personId='10', gamepk='g1', game_season=2024, pitcher_team_id='T1',
+                         starts_n=0, avg_pa=None):
+    return {
+        'personId': personId, 'gamepk': gamepk, 'game_season': game_season,
+        'pitcher_team_id': pitcher_team_id,
+        'pitcher_this_season_start_pa_starts_n': starts_n,
+        'pitcher_this_season_start_pa_avg_pa_per_start': avg_pa,
+    }
+
+
+def test_build_expected_batters_faced_uses_last_season_baseline_when_no_starts_yet_this_season():
+    """Season opener: this-season starts_n=0 -> shrinkage weight=0 ->
+    expected batters faced equals last season's baseline exactly."""
+
+    this_season = pd.DataFrame([_pa_this_season_row(starts_n=0, avg_pa=None)])
+    last_season = pd.DataFrame([{
+        'personId': '10', 'game_season': 2024,
+        'pitcher_last_season_start_pa_avg_pa_per_start': 24.0,
+        'pitcher_last_season_start_pa_n_starts': 20,
+    }])
+    team = pd.DataFrame([{'pitcher_team_id': 'T1', 'game_season': 2024, 'team_last_season_avg_pa_per_start': 22.0}])
+    league = pd.DataFrame([{'game_season': 2024, 'league_last_season_avg_pa_per_start': 21.0}])
+
+    result = build_expected_batters_faced(last_season, this_season, team, league)
+    row = result.iloc[0]
+
+    assert row['expected_batters_faced_weight'] == pytest.approx(0.0)
+    assert row['expected_batters_faced'] == pytest.approx(24.0)
+
+
+def test_build_expected_batters_faced_blends_toward_this_season_as_starts_accumulate():
+    """last-season baseline=24.0, this-season avg=20.0 over 5 starts, k=5 ->
+    weight=0.5 -> expected = 0.5*24.0 + 0.5*20.0 = 22.0."""
+
+    this_season = pd.DataFrame([_pa_this_season_row(starts_n=5, avg_pa=20.0)])
+    last_season = pd.DataFrame([{
+        'personId': '10', 'game_season': 2024,
+        'pitcher_last_season_start_pa_avg_pa_per_start': 24.0,
+        'pitcher_last_season_start_pa_n_starts': 20,
+    }])
+    team = pd.DataFrame([{'pitcher_team_id': 'T1', 'game_season': 2024, 'team_last_season_avg_pa_per_start': 22.0}])
+    league = pd.DataFrame([{'game_season': 2024, 'league_last_season_avg_pa_per_start': 21.0}])
+
+    result = build_expected_batters_faced(last_season, this_season, team, league, k=5.0)
+    row = result.iloc[0]
+
+    assert row['expected_batters_faced_weight'] == pytest.approx(0.5)
+    assert row['expected_batters_faced'] == pytest.approx(22.0)
+
+
+def test_build_expected_batters_faced_falls_back_to_team_avg_before_league_when_pitcher_missing():
+    """The genuinely new middle rung: a pitcher with no last-season row of
+    his own (rookie call-up, but on an established team) falls back to his
+    CURRENT team's average — not straight to the league-wide average, even
+    though both are available. Proves team is tried before league, not just
+    that league eventually gets used."""
+
+    this_season = pd.DataFrame([_pa_this_season_row(personId='99', pitcher_team_id='T1', starts_n=0, avg_pa=None)])
+    last_season = pd.DataFrame([], columns=[
+        'personId', 'game_season', 'pitcher_last_season_start_pa_avg_pa_per_start',
+        'pitcher_last_season_start_pa_n_starts',
+    ])
+    team = pd.DataFrame([{'pitcher_team_id': 'T1', 'game_season': 2024, 'team_last_season_avg_pa_per_start': 22.0}])
+    league = pd.DataFrame([{'game_season': 2024, 'league_last_season_avg_pa_per_start': 21.0}])
+
+    result = build_expected_batters_faced(last_season, this_season, team, league)
+    row = result.iloc[0]
+
+    assert row['expected_batters_faced'] == pytest.approx(22.0)
+
+
+def test_build_expected_batters_faced_falls_back_to_league_avg_when_pitcher_and_team_both_missing():
+    """A rookie on a team with no last-season SP-start data at all (e.g. an
+    expansion team's first season — rare, but the safety net must hold)
+    falls all the way back to the league-wide average."""
+
+    this_season = pd.DataFrame([_pa_this_season_row(personId='99', pitcher_team_id='T9', starts_n=0, avg_pa=None)])
+    last_season = pd.DataFrame([], columns=[
+        'personId', 'game_season', 'pitcher_last_season_start_pa_avg_pa_per_start',
+        'pitcher_last_season_start_pa_n_starts',
+    ])
+    team = pd.DataFrame([], columns=['pitcher_team_id', 'game_season', 'team_last_season_avg_pa_per_start'])
+    league = pd.DataFrame([{'game_season': 2024, 'league_last_season_avg_pa_per_start': 21.0}])
+
+    result = build_expected_batters_faced(last_season, this_season, team, league)
+    row = result.iloc[0]
+
+    assert row['expected_batters_faced'] == pytest.approx(21.0)
+
+
+def test_build_expected_batters_faced_exposes_raw_components_not_just_the_blend():
+    """Every input to the formula survives as its own column, including the
+    new team-level rung — same 'expose raw denominators' principle as
+    build_expected_start_innings and rolling_stats.py's sample-size columns."""
+
+    this_season = pd.DataFrame([_pa_this_season_row(starts_n=5, avg_pa=20.0)])
+    last_season = pd.DataFrame([{
+        'personId': '10', 'game_season': 2024,
+        'pitcher_last_season_start_pa_avg_pa_per_start': 24.0,
+        'pitcher_last_season_start_pa_n_starts': 20,
+    }])
+    team = pd.DataFrame([{'pitcher_team_id': 'T1', 'game_season': 2024, 'team_last_season_avg_pa_per_start': 22.0}])
+    league = pd.DataFrame([{'game_season': 2024, 'league_last_season_avg_pa_per_start': 21.0}])
+
+    result = build_expected_batters_faced(last_season, this_season, team, league)
+
+    for col in [
+        'pitcher_last_season_start_pa_avg_pa_per_start', 'pitcher_last_season_start_pa_n_starts',
+        'pitcher_this_season_start_pa_avg_pa_per_start', 'pitcher_this_season_start_pa_starts_n',
+        'team_last_season_avg_pa_per_start', 'league_last_season_avg_pa_per_start',
+        'expected_batters_faced_weight', 'expected_batters_faced',
     ]:
         assert col in result.columns
 

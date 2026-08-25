@@ -14,6 +14,7 @@ from models.hit_predictor.processing.features.rolling_stats import (
     build_pbp_pitcher_rolling_feats,
     build_pbp_pitcher_rolling_feats_all_roles,
     build_pbp_batter_rolling_feats,
+    build_team_batter_strikeout_rolling_feats,
 )
 
 
@@ -1110,3 +1111,119 @@ def test_build_pbp_batter_rolling_feats_column_names_no_collision_with_season_st
     assert 'batter_roll_season_pa_strikeout_rate' in result_season.columns
     assert 'batter_season_pa_strikeout_rate' not in result_short.columns
     assert 'batter_last_season_pa_strikeout_rate' not in result_short.columns
+
+
+# --------------------- TEAM-LEVEL BATTER STRIKEOUT ROLLING FEATS --------------------- #
+# k_predictor v2: opposing-lineup rolling K rate. Mirrors
+# build_pitcher_rolling_stats_all_roles' bullpen-pooling pattern (pool per-entity
+# per-game rows into one team-game row before rolling), but pools STARTING-LINEUP
+# batters only (those with a batting_order that game) rather than pooling by role.
+
+def _lineup_slot_row(personId='1', gamepk='g1', batting_order=1, **overrides):
+    row = {'personId': personId, 'gamepk': gamepk, 'batting_order': batting_order}
+    row.update(overrides)
+    return row
+
+
+def test_build_team_batter_strikeout_rolling_feats_pools_starting_lineup_by_team():
+    """Team-level rolling K rate must pool ONLY starting-lineup batters
+    (those carrying a batting_order that game) into the team-game total.
+    Batter '2' starts in g1 (batting_order=2) but has NO batting_order row
+    in g2 (simulates a bench/pinch-hit appearance) despite appearing in
+    pbp — g2's PA must be excluded from the team pool even though the
+    batter is present in pbp that game."""
+
+    pbp = pd.DataFrame([
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g1',
+                           game_date='2023-04-01', play_id=1, play_result='Strikeout', count_strikes=2),
+        _batter_pitch_row(batter_id='2', batter_team_id='T1', gamepk='g1',
+                           game_date='2023-04-01', play_id=2, play_result='Single'),
+        # g2: batter '2' pinch-hits (present in pbp) but has no lineup slot that game
+        _batter_pitch_row(batter_id='2', batter_team_id='T1', gamepk='g2',
+                           game_date='2023-04-02', play_id=1, play_result='Strikeout', count_strikes=2),
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g3',
+                           game_date='2023-04-03', play_id=1, play_result='Single'),
+    ])
+    batter_boxscore = pd.DataFrame([
+        _lineup_slot_row(personId='1', gamepk='g1', batting_order=1),
+        _lineup_slot_row(personId='2', gamepk='g1', batting_order=2),
+        # no row at all for batter '2' in g2 -> no batting_order that game
+        _lineup_slot_row(personId='1', gamepk='g3', batting_order=1),
+    ])
+
+    result = build_team_batter_strikeout_rolling_feats(pbp, batter_boxscore, window=10)
+
+    row_g3 = result.loc[result['gamepk'] == 'g3'].iloc[0]
+    # g1's starting lineup pooled: pa_total=2 (batter 1's K + batter 2's single), strikeout_n=1.
+    # g2's pinch-hit K (batter 2, no batting_order) must be EXCLUDED from the pool.
+    assert row_g3['team_roll_last10g_pa_total'] == 2
+    assert row_g3['team_roll_last10g_pa_strikeout_n'] == 1
+
+
+def test_build_team_batter_strikeout_rolling_feats_excludes_current_game():
+    """g3's rolled totals must reflect only g1+g2, not g3's own PAs — same
+    point-in-time guarantee _rolling_sum already provides elsewhere in this
+    file; this verifies the team-pooling step doesn't break it."""
+
+    pbp = pd.DataFrame([
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g1',
+                           game_date='2023-04-01', play_id=1, play_result='Strikeout', count_strikes=2),
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g2',
+                           game_date='2023-04-02', play_id=1, play_result='Single'),
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g3',
+                           game_date='2023-04-03', play_id=1, play_result='Strikeout', count_strikes=2),
+    ])
+    batter_boxscore = pd.DataFrame([
+        _lineup_slot_row(personId='1', gamepk='g1', batting_order=1),
+        _lineup_slot_row(personId='1', gamepk='g2', batting_order=1),
+        _lineup_slot_row(personId='1', gamepk='g3', batting_order=1),
+    ])
+
+    result = build_team_batter_strikeout_rolling_feats(pbp, batter_boxscore, window=10)
+
+    row_g3 = result.loc[result['gamepk'] == 'g3'].iloc[0]
+    # g1 (1 PA, 1 K) + g2 (1 PA, 0 K) -> pa_total=2, strikeout_n=1; g3's own K excluded
+    assert row_g3['team_roll_last10g_pa_total'] == 2
+    assert row_g3['team_roll_last10g_pa_strikeout_n'] == 1
+
+
+def test_build_team_batter_strikeout_rolling_feats_rate_divides_rolled_sums_not_per_game_avg():
+    """Rate must come from rolled numerator/denominator sums, not an
+    average of each game's own rate — the 'roll counts, not rates' rule
+    this whole file follows elsewhere. Also: a team's first game has zero
+    rolled PA and must produce NaN, not a ZeroDivisionError/inf."""
+
+    pbp_rows = [
+        # g1: 3 PA, 1 K -> rate 1/3
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g1', game_date='2023-04-01',
+                           play_id=1, play_result='Strikeout', count_strikes=2),
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g1', game_date='2023-04-01',
+                           play_id=2, play_result='Single'),
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g1', game_date='2023-04-01',
+                           play_id=3, play_result='Single'),
+    ]
+    # g2: 6 PA, 1 K -> rate 1/6
+    for i in range(1, 7):
+        pbp_rows.append(_batter_pitch_row(
+            batter_id='1', batter_team_id='T1', gamepk='g2', game_date='2023-04-02',
+            play_id=i, play_result='Strikeout' if i == 1 else 'Single',
+            count_strikes=2 if i == 1 else 0,
+        ))
+    pbp_rows.append(_batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g3',
+                                       game_date='2023-04-03', play_id=1, play_result='Single'))
+    pbp = pd.DataFrame(pbp_rows)
+
+    batter_boxscore = pd.DataFrame([
+        _lineup_slot_row(personId='1', gamepk='g1', batting_order=1),
+        _lineup_slot_row(personId='1', gamepk='g2', batting_order=1),
+        _lineup_slot_row(personId='1', gamepk='g3', batting_order=1),
+    ])
+
+    result = build_team_batter_strikeout_rolling_feats(pbp, batter_boxscore, window=10)
+
+    row_g1 = result.loc[result['gamepk'] == 'g1'].iloc[0]
+    assert pd.isna(row_g1['team_roll_last10g_pa_strikeout_rate'])
+
+    row_g3 = result.loc[result['gamepk'] == 'g3'].iloc[0]
+    # rolled: strikeout_n=1+1=2, total PA=3+6=9 -> 2/9, NOT naive avg of (1/3, 1/6)=0.25
+    assert row_g3['team_roll_last10g_pa_strikeout_rate'] == pytest.approx(2 / 9)

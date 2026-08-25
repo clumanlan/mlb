@@ -230,6 +230,16 @@ def build_expected_start_innings(
     last-season -> league-wide -> this-season-alone, for a rookie or
     otherwise-unseen pitcher with no last-season row.
 
+    NOTE — this is a 2-level cascade (pitcher -> league), not 3-level. See
+    build_expected_batters_faced below for the pitcher -> team -> league
+    version built for k_predictor: this function deliberately wasn't
+    extended with a team-level rung to match, since n_pa_predictor's locked
+    production threshold and short_outing_predictor's baseline+v1 both
+    already depend on its exact current fallback behavior — adding a team
+    rung here would change their feature values and require re-verifying
+    both. If a team-level fallback for IP-per-start is ever wanted, build a
+    third function rather than changing this one's behavior in place.
+
     Every input to the formula (not just the final blend) survives as its
     own column — same 'expose raw denominators, let the model see the
     building blocks' principle as rolling_stats.py's sample-size columns.
@@ -260,6 +270,95 @@ def build_expected_start_innings(
 
     df['expected_start_innings_weight'] = weight
     df['expected_start_innings'] = (1 - weight) * baseline + weight * this_season_avg_safe
+
+    return df
+
+
+# --------------------------- PITCHER START PA (batters-faced estimate, k_predictor) --------------------------- #
+# k_predictor's own 3-level pitcher -> team -> league shrinkage cascade for "how many
+# batters will this starter face" — same overall shape as the IP cascade above, but
+# pbp-derived (no pitcher_boxscore input needed: batters faced is a PA count, and pbp
+# already carries pitcher_role directly) and with a team-level middle rung this file's
+# IP cascade deliberately doesn't have. See season_stats.py's PITCHER START PA section
+# for why this is a separate cascade, not a retrofit of build_expected_start_innings.
+
+def build_pitcher_start_pa_this_season(
+    pbp: pd.DataFrame, window: str | int = 'season'
+) -> pd.DataFrame:
+    """One row per (personId, gamepk) SP start: rolling avg batters faced
+    per start and starts-so-far count, UP TO (not including) this start,
+    shift(1) — same _rolling_sum engine and shape as
+    build_pitcher_start_ip_this_season. Also carries pitcher_team_id for
+    THIS start (not last season's team), so build_expected_batters_faced
+    can look up the team fallback for wherever this pitcher currently
+    plays, correctly following him through a mid-season trade."""
+
+    sp_pbp = pbp[pbp['pitcher_role'] == 'sp']
+    last_pitch = sp_pbp[
+        sp_pbp['pitch_number'] == sp_pbp.groupby(['gamepk', 'play_id'])['pitch_number'].transform('max')
+    ]
+    per_start = (
+        last_pitch
+        .groupby(['pitcher_id', 'pitcher_team_id', 'gamepk', 'game_date', 'game_datetime', 'game_season'])
+        .agg(pa_total=('play_result', 'count'))
+        .reset_index()
+        .rename(columns={'pitcher_id': 'personId'})
+    )
+    per_start['starts_n'] = 1
+
+    rolled = _rolling_sum(
+        per_start, entity_col='personId', cols=['pa_total', 'starts_n'], window=window, sort_col='game_datetime'
+    )
+    rolled['avg_pa_per_start'] = rolled['pa_total'] / rolled['starts_n'].replace(0, np.nan)
+    rolled['starts_n'] = rolled['starts_n'].fillna(0)
+
+    key_cols = ['personId', 'pitcher_team_id', 'gamepk', 'game_date', 'game_datetime', 'game_season']
+    rolled = rolled[key_cols + ['starts_n', 'avg_pa_per_start']]
+
+    prefix = 'pitcher_this_season_start_pa_' if window == 'season' else f'pitcher_last{window}_start_pa_'
+    return _prefix_stat_cols(rolled, prefix=prefix, key_cols=key_cols)
+
+
+def build_expected_batters_faced(
+    pitcher_start_pa_last_season: pd.DataFrame,
+    pitcher_start_pa_this_season: pd.DataFrame,
+    team_avg_start_pa: pd.DataFrame,
+    league_avg_start_pa: pd.DataFrame,
+    k: float = 5.0,
+) -> pd.DataFrame:
+    """3-level shrinkage cascade for pre-game-knowable expected batters
+    faced this start: baseline = pitcher's own last season -> his CURRENT
+    team's last-season average -> full league last-season average (first
+    non-null wins), then blended toward this season's own emerging average
+    as starts accumulate — shrinkage_weight = starts_n / (starts_n + k),
+    identical formula to build_expected_start_innings. See that function's
+    own docstring and season_stats.py's PITCHER START PA section for why
+    this is a deliberately separate function rather than a retrofit."""
+
+    df = pitcher_start_pa_this_season.merge(
+        pitcher_start_pa_last_season[[
+            'personId', 'game_season',
+            'pitcher_last_season_start_pa_avg_pa_per_start',
+            'pitcher_last_season_start_pa_n_starts',
+        ]],
+        on=['personId', 'game_season'], how='left',
+    )
+    df = df.merge(team_avg_start_pa, on=['pitcher_team_id', 'game_season'], how='left')
+    df = df.merge(league_avg_start_pa, on='game_season', how='left')
+
+    baseline = (
+        df['pitcher_last_season_start_pa_avg_pa_per_start']
+        .fillna(df['team_last_season_avg_pa_per_start'])
+        .fillna(df['league_last_season_avg_pa_per_start'])
+        .fillna(df['pitcher_this_season_start_pa_avg_pa_per_start'])
+    )
+
+    starts_n = df['pitcher_this_season_start_pa_starts_n']
+    weight = starts_n / (starts_n + k)
+    this_season_avg_safe = df['pitcher_this_season_start_pa_avg_pa_per_start'].fillna(0)
+
+    df['expected_batters_faced_weight'] = weight
+    df['expected_batters_faced'] = (1 - weight) * baseline + weight * this_season_avg_safe
 
     return df
 

@@ -17,12 +17,16 @@ from models.hit_predictor.processing.features.season_stats import (
     _create_pitcher_pa_outcome_stats,
     _create_pitcher_start_depth_stats,
     _create_pitcher_start_ip_stats,
+    _create_pitcher_start_pa_stats,
     _pivot_by_hand,
     _shift_to_last_season,
     build_batter_stats,
     build_league_avg_start_depth,
     build_league_avg_start_ip,
+    build_league_avg_start_pa,
+    build_team_avg_start_pa,
     build_pitcher_start_ip_stats,
+    build_pitcher_start_pa_stats,
     build_league_handedness_stats,
     build_league_times_through_order_stats,
     build_pbp_batter_feats,
@@ -1375,3 +1379,126 @@ def test_build_league_avg_start_ip_weights_by_each_pitchers_start_count():
     row = result[result['game_season'] == 2024].iloc[0]
 
     assert row['league_last_season_avg_ip_per_start'] == pytest.approx(5.5)
+
+
+# --------------------------- PITCHER START PA (batters-faced estimate, k_predictor) --------------------------- #
+# "How many batters will this starter typically face" — same start-grain shrinkage role
+# as PITCHER START IP above, but for k_predictor's expected_batters_faced (see
+# game_context.py), which needs a 3-level pitcher -> team -> league cascade rather than
+# this file's existing 2-level pitcher -> league one (build_expected_start_innings).
+# Deliberately a SEPARATE set of functions, not a retrofit of the IP cascade above —
+# build_expected_start_innings already has locked/frozen downstream results
+# (n_pa_predictor's production threshold, short_outing_predictor's baseline+v1) that
+# changing its fallback behavior would invalidate. pbp-derived only (unlike the IP
+# version): pitcher_boxscore has no 'batters faced' column, and pbp already carries
+# pitcher_role directly, so no role_lookup join is needed here either.
+
+def _make_start_pa_pbp():
+    return pd.DataFrame([
+        # Pitcher '10' on team T1: two SP starts (3 PA, 5 PA) and one bullpen
+        # appearance (2 PA) that must be excluded from the start-PA average.
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g1', 'game_date': pd.Timestamp('2023-04-01'),
+         'game_datetime': pd.Timestamp('2023-04-01 19:00'), 'game_season': 2023, 'pitcher_role': 'sp',
+         'play_id': 1, 'pitch_number': 1, 'play_result': 'Single'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g1', 'game_date': pd.Timestamp('2023-04-01'),
+         'game_datetime': pd.Timestamp('2023-04-01 19:00'), 'game_season': 2023, 'pitcher_role': 'sp',
+         'play_id': 2, 'pitch_number': 1, 'play_result': 'Strikeout'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g1', 'game_date': pd.Timestamp('2023-04-01'),
+         'game_datetime': pd.Timestamp('2023-04-01 19:00'), 'game_season': 2023, 'pitcher_role': 'sp',
+         'play_id': 3, 'pitch_number': 1, 'play_result': 'Groundout'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g2', 'game_date': pd.Timestamp('2023-04-08'),
+         'game_datetime': pd.Timestamp('2023-04-08 19:00'), 'game_season': 2023, 'pitcher_role': 'sp',
+         'play_id': 1, 'pitch_number': 1, 'play_result': 'Walk'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g2', 'game_date': pd.Timestamp('2023-04-08'),
+         'game_datetime': pd.Timestamp('2023-04-08 19:00'), 'game_season': 2023, 'pitcher_role': 'sp',
+         'play_id': 2, 'pitch_number': 1, 'play_result': 'Single'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g2', 'game_date': pd.Timestamp('2023-04-08'),
+         'game_datetime': pd.Timestamp('2023-04-08 19:00'), 'game_season': 2023, 'pitcher_role': 'sp',
+         'play_id': 3, 'pitch_number': 1, 'play_result': 'Strikeout'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g2', 'game_date': pd.Timestamp('2023-04-08'),
+         'game_datetime': pd.Timestamp('2023-04-08 19:00'), 'game_season': 2023, 'pitcher_role': 'sp',
+         'play_id': 4, 'pitch_number': 1, 'play_result': 'Flyout'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g2', 'game_date': pd.Timestamp('2023-04-08'),
+         'game_datetime': pd.Timestamp('2023-04-08 19:00'), 'game_season': 2023, 'pitcher_role': 'sp',
+         'play_id': 5, 'pitch_number': 1, 'play_result': 'Groundout'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g3', 'game_date': pd.Timestamp('2023-04-15'),
+         'game_datetime': pd.Timestamp('2023-04-15 19:00'), 'game_season': 2023, 'pitcher_role': 'bullpen',
+         'play_id': 1, 'pitch_number': 1, 'play_result': 'Single'},
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': 'g3', 'game_date': pd.Timestamp('2023-04-15'),
+         'game_datetime': pd.Timestamp('2023-04-15 19:00'), 'game_season': 2023, 'pitcher_role': 'bullpen',
+         'play_id': 2, 'pitch_number': 1, 'play_result': 'Groundout'},
+    ])
+
+
+def test_create_pitcher_start_pa_stats_averages_batters_faced_across_starts_only():
+    """Hand-computed: two 'sp' starts facing 3 and 5 batters -> avg = 4.0,
+    n_starts=2. The bullpen appearance (2 batters faced) must not pull the
+    average down or inflate n_starts — a reliever outing isn't a 'start'."""
+
+    result = _create_pitcher_start_pa_stats(_make_start_pa_pbp())
+    row = result[(result['personId'] == '10') & (result['game_season'] == 2023)].iloc[0]
+
+    assert row['pitcher_season_start_pa_avg_pa_per_start'] == pytest.approx(4.0)
+    assert row['pitcher_season_start_pa_n_starts'] == 2
+    assert row['pitcher_team_id'] == 'T1'  # unprefixed — a join key, not a stat
+
+
+def test_build_pitcher_start_pa_stats_shifts_game_season_by_one():
+    """Same point-in-time-safe convention as build_pitcher_start_ip_stats:
+    2023 data can only be joined onto 2024 games."""
+
+    result = build_pitcher_start_pa_stats(_make_start_pa_pbp())
+    row = result[result['personId'] == '10'].iloc[0]
+
+    assert row['game_season'] == 2024
+    assert 'pitcher_last_season_start_pa_avg_pa_per_start' in result.columns
+    assert 'pitcher_season_start_pa_avg_pa_per_start' not in result.columns
+    assert row['pitcher_last_season_start_pa_avg_pa_per_start'] == pytest.approx(4.0)
+
+
+def test_build_league_avg_start_pa_weights_by_each_pitchers_start_count():
+    """Same weighting rationale as build_league_avg_start_ip: a workhorse's
+    average should count for more than a two-start sample. Weighted avg =
+    (5.0*10 + 3.0*2) / 12 = 4.667, not the plain-mean (5.0+3.0)/2 = 4.0."""
+
+    pitcher_start_pa_stats = pd.DataFrame([
+        {'pitcher_team_id': 'T1', 'game_season': 2024,
+         'pitcher_last_season_start_pa_avg_pa_per_start': 5.0,
+         'pitcher_last_season_start_pa_n_starts': 10},
+        {'pitcher_team_id': 'T2', 'game_season': 2024,
+         'pitcher_last_season_start_pa_avg_pa_per_start': 3.0,
+         'pitcher_last_season_start_pa_n_starts': 2},
+    ])
+
+    result = build_league_avg_start_pa(pitcher_start_pa_stats)
+    row = result[result['game_season'] == 2024].iloc[0]
+
+    assert row['league_last_season_avg_pa_per_start'] == pytest.approx(56 / 12)
+
+
+def test_build_team_avg_start_pa_computes_separately_per_team():
+    """The genuinely new piece vs. the league-only IP cascade: two pitchers
+    on DIFFERENT teams must produce two DIFFERENT team averages, each
+    weighted by that team's own pitchers' start counts — not pooled into
+    one league-wide number. Team T1: weighted avg = (5.0*10 + 4.0*5)/15 =
+    4.667. Team T2 (one pitcher only): avg = 3.0."""
+
+    pitcher_start_pa_stats = pd.DataFrame([
+        {'pitcher_team_id': 'T1', 'game_season': 2024,
+         'pitcher_last_season_start_pa_avg_pa_per_start': 5.0,
+         'pitcher_last_season_start_pa_n_starts': 10},
+        {'pitcher_team_id': 'T1', 'game_season': 2024,
+         'pitcher_last_season_start_pa_avg_pa_per_start': 4.0,
+         'pitcher_last_season_start_pa_n_starts': 5},
+        {'pitcher_team_id': 'T2', 'game_season': 2024,
+         'pitcher_last_season_start_pa_avg_pa_per_start': 3.0,
+         'pitcher_last_season_start_pa_n_starts': 2},
+    ])
+
+    result = build_team_avg_start_pa(pitcher_start_pa_stats)
+
+    row_t1 = result[(result['pitcher_team_id'] == 'T1') & (result['game_season'] == 2024)].iloc[0]
+    row_t2 = result[(result['pitcher_team_id'] == 'T2') & (result['game_season'] == 2024)].iloc[0]
+
+    assert row_t1['team_last_season_avg_pa_per_start'] == pytest.approx((5.0 * 10 + 4.0 * 5) / 15)
+    assert row_t2['team_last_season_avg_pa_per_start'] == pytest.approx(3.0)

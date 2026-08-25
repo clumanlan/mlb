@@ -1,0 +1,568 @@
+<title>Expected Batters Faced</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Source+Sans+3:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #f6f7f3;
+    --surface: #ffffff;
+    --surface-2: #eef1eb;
+    --ink: #14181a;
+    --ink-muted: #4b5550;
+    --ink-faint: #7c8681;
+    --line: #dce0d8;
+    --accent: #2f6f4f;
+    --accent-ink: #ffffff;
+    --accent-wash: #e3ede6;
+    --gold: #a5730f;
+    --gold-wash: #f5ecd8;
+    --caution: #a6472b;
+    --caution-wash: #f4e6e0;
+    --shadow: 0 1px 2px rgba(20, 24, 26, 0.06), 0 8px 24px rgba(20, 24, 26, 0.05);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101413;
+      --surface: #171c1b;
+      --surface-2: #1d2321;
+      --ink: #e9ede9;
+      --ink-muted: #9fada5;
+      --ink-faint: #6d7873;
+      --line: #2a302c;
+      --accent: #5cbd8c;
+      --accent-ink: #0c1512;
+      --accent-wash: #1a2b23;
+      --gold: #e0ab4d;
+      --gold-wash: #2c2417;
+      --caution: #e28e70;
+      --caution-wash: #2c1e18;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #101413;
+    --surface: #171c1b;
+    --surface-2: #1d2321;
+    --ink: #e9ede9;
+    --ink-muted: #9fada5;
+    --ink-faint: #6d7873;
+    --line: #2a302c;
+    --accent: #5cbd8c;
+    --accent-ink: #0c1512;
+    --accent-wash: #1a2b23;
+    --gold: #e0ab4d;
+    --gold-wash: #2c2417;
+    --caution: #e28e70;
+    --caution-wash: #2c1e18;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Source Sans 3', ui-sans-serif, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection { background: var(--accent-wash); color: var(--ink); }
+
+  a { color: var(--accent); }
+
+  h1, h2, h3 {
+    font-family: 'Archivo', ui-sans-serif, system-ui, sans-serif;
+    text-wrap: balance;
+    color: var(--ink);
+    margin: 0;
+  }
+
+  .mono {
+    font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+  }
+
+  /* ---------------------------- header ---------------------------- */
+
+  header.page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 56px 24px 40px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  h1.title {
+    font-size: clamp(34px, 5vw, 48px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin-top: 10px;
+    line-height: 1.05;
+  }
+
+  .dek {
+    margin-top: 14px;
+    max-width: 62ch;
+    font-size: 18px;
+    color: var(--ink-muted);
+  }
+
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 24px;
+  }
+
+  .badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    padding: 5px 10px;
+    border-radius: 5px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--ink-muted);
+  }
+
+  .badge.win { background: var(--accent-wash); color: var(--accent); border-color: transparent; font-weight: 600; }
+
+  /* ---------------------------- sections ---------------------------- */
+
+  section.block {
+    padding: 48px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  section.block:last-of-type { border-bottom: none; }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .section-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-wash);
+    padding: 3px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  h2.section-title {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  p { color: var(--ink); max-width: 68ch; }
+  p.lead { color: var(--ink-muted); max-width: 68ch; }
+
+  /* ---------------------------- scoreboard ---------------------------- */
+
+  .scoreboard {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  table.stat {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14.5px;
+  }
+
+  table.stat th, table.stat td {
+    padding: 12px 16px;
+    text-align: right;
+    border-bottom: 1px solid var(--line);
+  }
+  table.stat tr:last-child th, table.stat tr:last-child td { border-bottom: none; }
+
+  table.stat th:first-child, table.stat td:first-child {
+    text-align: left;
+    color: var(--ink-muted);
+    font-weight: 500;
+  }
+
+  table.stat thead th {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+    background: var(--surface-2);
+  }
+
+  table.stat td { font-family: 'IBM Plex Mono', monospace; color: var(--ink); }
+  table.stat td.delta-up { color: var(--accent); font-weight: 600; }
+  table.stat tr.hl td { color: var(--gold); font-weight: 600; }
+
+  .verdict-pill {
+    display: inline-block;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--accent-wash);
+    color: var(--accent);
+  }
+
+  /* ---------------------------- importance bars ---------------------------- */
+
+  .imp-row {
+    display: grid;
+    grid-template-columns: 220px 1fr 56px;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 0;
+  }
+  .imp-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--ink-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .imp-label.new { color: var(--accent); font-weight: 600; }
+  .imp-track { height: 9px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
+  .imp-fill { height: 100%; background: var(--ink-faint); border-radius: 5px; }
+  .imp-fill.new { background: var(--accent); }
+  .imp-val { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--ink-faint); text-align: right; }
+
+  /* ---------------------------- cards / callouts ---------------------------- */
+
+  .callout {
+    border-radius: 10px;
+    padding: 18px 20px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    margin: 20px 0;
+  }
+  .callout.caution { background: var(--caution-wash); border-color: transparent; }
+  .callout.caution .callout-title { color: var(--caution); }
+  .callout-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--ink-muted);
+    margin-bottom: 8px;
+  }
+  .callout p { margin: 0; max-width: 100%; }
+  .callout p + p { margin-top: 10px; }
+
+  /* ---------------------------- blast radius list ---------------------------- */
+
+  ul.blast { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 6px; }
+  ul.blast li {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--ink-muted);
+    padding-left: 18px;
+    position: relative;
+  }
+  ul.blast li::before {
+    content: '·';
+    position: absolute;
+    left: 4px;
+    color: var(--caution);
+    font-weight: 700;
+  }
+  ul.blast li b { color: var(--ink); font-weight: 600; }
+
+  /* ---------------------------- cascade diagram ---------------------------- */
+
+  .cascade {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin: 22px 0 10px;
+    flex-wrap: wrap;
+  }
+  .cascade-step {
+    flex: 1 1 140px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+    position: relative;
+  }
+  .cascade-step + .cascade-step { margin-left: 28px; }
+  .cascade-step + .cascade-step::before {
+    content: '→';
+    position: absolute;
+    left: -24px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--ink-faint);
+    font-size: 18px;
+  }
+  .cascade-step .k { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); }
+  .cascade-step .v { font-weight: 600; margin-top: 4px; font-size: 15px; }
+  .cascade-step.final { background: var(--accent-wash); border-color: transparent; }
+  .cascade-step.final .k { color: var(--accent); }
+
+  /* ---------------------------- function map ---------------------------- */
+
+  table.fn { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 8px; }
+  table.fn th, table.fn td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.fn th { font-family: 'IBM Plex Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-faint); font-weight: 600; }
+  table.fn td:first-child { font-family: 'IBM Plex Mono', monospace; color: var(--ink); white-space: nowrap; font-weight: 500; }
+  table.fn td.file { color: var(--ink-faint); font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; }
+  .overflow-x { overflow-x: auto; }
+
+  /* ---------------------------- manifest ---------------------------- */
+
+  .manifest { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface); }
+  .manifest-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); align-items: center; }
+  .manifest-row:last-child { border-bottom: none; }
+  .manifest-path { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink); }
+  .manifest-path .new-tag { color: var(--accent); font-size: 11px; font-weight: 600; margin-left: 8px; }
+  .manifest-diff { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; white-space: nowrap; }
+  .plus { color: var(--accent); }
+  .minus { color: var(--caution); }
+
+  /* ---------------------------- next steps ---------------------------- */
+
+  ol.next { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 14px; }
+  ol.next li { display: grid; grid-template-columns: 28px 1fr; gap: 12px; }
+  ol.next .n {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-wash);
+    width: 28px; height: 28px;
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+  }
+  ol.next .body b { display: block; font-weight: 600; margin-bottom: 2px; }
+  ol.next .body span { color: var(--ink-muted); font-size: 14.5px; }
+
+  footer.page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+    color: var(--ink-faint);
+    font-size: 13px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  @media (max-width: 620px) {
+    .cascade { flex-direction: column; }
+    .cascade-step + .cascade-step { margin-left: 0; margin-top: 20px; }
+    .cascade-step + .cascade-step::before { content: '↓'; left: 50%; top: -20px; transform: translateX(-50%); }
+    .imp-row { grid-template-columns: 130px 1fr 44px; }
+  }
+</style>
+
+<header class="page">
+  <div class="eyebrow">mlbdk · k_predictor · session diff — 2026-08-24</div>
+  <h1 class="title">Expected Batters Faced</h1>
+  <p class="dek">k_predictor's v2 feature set landed a second straight <code class="mono">real_improvement</code> verdict, which reopened the question of what "production-ready" actually means for a strikeout <em>count</em> prop. This is the diff that followed: a new pitcher&nbsp;→&nbsp;team&nbsp;→&nbsp;league shrinkage cascade for how many batters a starter will face, built test-first, deliberately kept separate from the existing innings cascade three other models already depend on.</p>
+  <div class="badges">
+    <span class="badge win">483 tests passing</span>
+    <span class="badge">7 files changed</span>
+    <span class="badge">+683 / −1 lines</span>
+    <span class="badge">12 new tests, all TDD</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section class="block">
+    <div class="section-head">
+      <span class="section-num">01</span>
+      <h2 class="section-title">The scoreboard — k_predictor v2</h2>
+    </div>
+    <p class="lead">Batter-side and team-side rolling strikeout rate, plus weather and times-through-order, added on top of v1's pitcher-workload features. Evaluated the same two-tier way this project always does: PR-AUC as a fast PA-grain filter, then reliability/resolution at game grain as the actual decision.</p>
+
+    <div class="scoreboard">
+      <table class="stat">
+        <thead>
+          <tr><th>PA grain (LR)</th><th>PR-AUC</th><th>ROC-AUC</th><th>vs. prior</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>baseline</td><td>0.2702</td><td>0.5821</td><td>—</td></tr>
+          <tr><td>v1 — pitcher workload</td><td>0.2732</td><td>0.5869</td><td class="delta-up">+0.0030</td></tr>
+          <tr class="hl"><td>v2 — batter + team + TTO</td><td>0.2816</td><td>0.5981</td><td class="delta-up">+0.0084</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="scoreboard" style="margin-top:14px;">
+      <table class="stat">
+        <thead>
+          <tr><th>Game grain (the decision)</th><th>Reliability</th><th>Resolution</th><th>Verdict</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>naive (per-role rate)</td><td>0.0005</td><td>0.0045</td><td>—</td></tr>
+          <tr><td>v1</td><td>0.0002</td><td>0.0115</td><td><span class="verdict-pill">real_improvement</span></td></tr>
+          <tr class="hl"><td>v2</td><td>0.0002</td><td>0.0131</td><td><span class="verdict-pill">real_improvement</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="lead" style="margin-top:22px;">Feature importance confirmed the reasoning behind what got built — the two cheap, well-motivated additions earned their place; the two speculative ones didn't disappear, but didn't lead either.</p>
+
+    <div style="margin-top:8px;">
+      <div class="imp-row"><span class="imp-label">pitcher_roll_season_pa_strikeout_rate</span><div class="imp-track"><div class="imp-fill" style="width:100%"></div></div><span class="imp-val">.136</span></div>
+      <div class="imp-row"><span class="imp-label new">batter_roll_season_pa_strikeout_rate</span><div class="imp-track"><div class="imp-fill new" style="width:78%"></div></div><span class="imp-val">.106</span></div>
+      <div class="imp-row"><span class="imp-label">pitcher_last_season_pa_strikeout_rate</span><div class="imp-track"><div class="imp-fill" style="width:46%"></div></div><span class="imp-val">.063</span></div>
+      <div class="imp-row"><span class="imp-label new">expected_times_through_order</span><div class="imp-track"><div class="imp-fill new" style="width:44%"></div></div><span class="imp-val">.060</span></div>
+      <div class="imp-row"><span class="imp-label" style="opacity:.55">opp_team_roll_season_pa_strikeout_rate</span><div class="imp-track"><div class="imp-fill" style="width:24%; opacity:.55"></div></div><span class="imp-val" style="opacity:.55">.033</span></div>
+      <div class="imp-row"><span class="imp-label" style="opacity:.55">pitching_team_roll_season_pa_strikeout_rate</span><div class="imp-track"><div class="imp-fill" style="width:23%; opacity:.55"></div></div><span class="imp-val" style="opacity:.55">.032</span></div>
+      <div class="imp-row"><span class="imp-label" style="opacity:.4">weather_temp / weather_condition</span><div class="imp-track"><div class="imp-fill" style="width:22%; opacity:.4"></div></div><span class="imp-val" style="opacity:.4">.030</span></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <span class="section-num">02</span>
+      <h2 class="section-title">Why a threshold lock didn't fit</h2>
+    </div>
+    <p>The natural next move looked like <code class="mono">n_pa_predictor</code>'s playbook — sweep a confidence threshold, lock an operating point. That playbook assumes a binary target. k_predictor's real target isn't: a DK strikeout prop is a <em>count</em> compared against a line that moves game to game. Summing per-PA probabilities via <code class="mono">1 − ∏(1−p)</code> only ever answers "at least one," at batter grain — not "how many, for this pitcher, across the whole start."</p>
+    <p>Closing that gap needs two things a confidence threshold doesn't provide: an estimate of <b>how many batters this pitcher will face</b>, and a way to turn per-PA probabilities into a <b>full distribution</b> over the total. This diff is the first piece.</p>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <span class="section-num">03</span>
+      <h2 class="section-title">The cascade</h2>
+    </div>
+    <p class="lead">Same shrinkage shape this codebase already trusts — <code class="mono">build_expected_start_innings</code>, and before that the hit_predictor baseline that beat every gradient-boosted model tried. Closed-form, not another trained classifier. The one addition: a team-level rung between the pitcher's own thin sample and the league floor.</p>
+
+    <div class="cascade">
+      <div class="cascade-step"><div class="k">1 · pitcher</div><div class="v">Own last-season avg PA/start</div></div>
+      <div class="cascade-step"><div class="k">2 · team</div><div class="v">Current team's weighted avg</div></div>
+      <div class="cascade-step"><div class="k">3 · league</div><div class="v">League-wide weighted avg</div></div>
+      <div class="cascade-step final"><div class="k">blend</div><div class="v">shrunk toward this season's own emerging average, weight = starts_n / (starts_n + k)</div></div>
+    </div>
+
+    <div class="callout">
+      <div class="callout-title">Why team ranks above league, not instead of it</div>
+      <p>A team's own quick-hook-vs-let-them-go-deep tendency is real, but a rotation is ~5–8 arms a season against the league's ~150 — noisier, and partly just "who's on the roster" rather than pure philosophy. League stays the final floor precisely because it's the more stable one; team fills the gap above it rather than replacing it.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <span class="section-num">04</span>
+      <h2 class="section-title">What didn't change</h2>
+    </div>
+    <p>The obvious shortcut — retrofit the existing <code class="mono">build_expected_start_innings</code> with a team rung, or rename it for clarity now that a sibling exists — was rejected. That function isn't a clean edit site anymore; it's load-bearing.</p>
+
+    <div class="callout caution">
+      <div class="callout-title">Depends on the current behavior, unchanged</div>
+      <ul class="blast">
+        <li><b>n_pa_predictor</b> — the one locked production artifact in this repo (XGBoost @ 0.85 confidence, 64.7% precision) uses it as the opposing-starter feature</li>
+        <li><b>short_outing_predictor</b> — baseline <i>and</i> v1 use it directly for the pitcher's own start</li>
+        <li>8+ files total, several frozen experiment snapshots (<code class="mono">v4</code>, <code class="mono">v5</code>) this project treats as historical record</li>
+      </ul>
+      <p style="margin-top:12px;">A same-values rename still touches every one of those. A behavior change means re-verifying the locked threshold. Neither cost was worth paying for naming symmetry — a cross-reference docstring on the old function does the same job for a reader, for free.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <span class="section-num">05</span>
+      <h2 class="section-title">What shipped</h2>
+    </div>
+    <p class="lead">Six new functions across two files, named so the cascade shape is legible without reading the body.</p>
+
+    <div class="overflow-x">
+      <table class="fn">
+        <thead><tr><th>function</th><th>grain</th><th>does</th></tr></thead>
+        <tbody>
+          <tr><td>_create_pitcher_start_pa_stats</td><td class="file">season_stats.py</td><td>Per-pitcher season avg batters faced/start, SP-only, pbp-derived — carries current team_id</td></tr>
+          <tr><td>build_pitcher_start_pa_stats</td><td class="file">season_stats.py</td><td>Shifted to last season, ready to join onto this year</td></tr>
+          <tr><td>build_league_avg_start_pa</td><td class="file">season_stats.py</td><td>League floor, weighted by each pitcher's own start count</td></tr>
+          <tr><td>build_team_avg_start_pa</td><td class="file">season_stats.py</td><td>New middle rung — same weighting, grouped by team</td></tr>
+          <tr><td>build_pitcher_start_pa_this_season</td><td class="file">game_context.py</td><td>Rolling in-season avg, point-in-time shifted, follows a pitcher through a trade</td></tr>
+          <tr><td>build_expected_batters_faced</td><td class="file">game_context.py</td><td>The full blend — 3-level baseline, shrunk toward this season</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <span class="section-num">06</span>
+      <h2 class="section-title">TDD ledger</h2>
+    </div>
+    <p class="lead">Every function above was written to a failing test first. One real bug surfaced along the way, in the <i>previous</i> diff of this session — caught only because the full suite ran, not just the new tests.</p>
+
+    <div class="scoreboard">
+      <table class="stat">
+        <thead><tr><th>file</th><th>tests added</th><th>red confirmed</th><th>green</th></tr></thead>
+        <tbody>
+          <tr><td>test_season_stats.py</td><td>4</td><td>ImportError</td><td class="delta-up">first attempt</td></tr>
+          <tr><td>test_game_context.py</td><td>8</td><td>ImportError</td><td class="delta-up">first attempt</td></tr>
+          <tr><td>test_rolling_stats.py <span style="color:var(--ink-faint)">(prior)</span></td><td>3</td><td>ImportError</td><td class="delta-up">first attempt</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:16px;">Full suite: <b class="mono" style="color:var(--accent);">483 passed, 0 failed</b> — up from 468 at session start.</p>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <span class="section-num">07</span>
+      <h2 class="section-title">Diff manifest</h2>
+    </div>
+    <div class="manifest">
+      <div class="manifest-row"><span class="manifest-path">src/models/hit_predictor/processing/features/season_stats.py</span><span class="manifest-diff"><span class="plus">+94</span></span></div>
+      <div class="manifest-row"><span class="manifest-path">src/models/hit_predictor/processing/features/game_context.py</span><span class="manifest-diff"><span class="plus">+90</span></span></div>
+      <div class="manifest-row"><span class="manifest-path">src/models/hit_predictor/processing/features/rolling_stats.py</span><span class="manifest-diff"><span class="plus">+45</span></span></div>
+      <div class="manifest-row"><span class="manifest-path">tests/hit_predictor/test_game_context.py</span><span class="manifest-diff"><span class="plus">+161</span></span></div>
+      <div class="manifest-row"><span class="manifest-path">tests/hit_predictor/test_season_stats.py</span><span class="manifest-diff"><span class="plus">+118</span></span></div>
+      <div class="manifest-row"><span class="manifest-path">tests/hit_predictor/test_rolling_stats.py</span><span class="manifest-diff"><span class="plus">+117</span></span></div>
+      <div class="manifest-row"><span class="manifest-path">ROADMAP.md</span><span class="manifest-diff"><span class="plus">+3</span> <span class="minus">−1</span></span></div>
+      <div class="manifest-row"><span class="manifest-path">src/models/k_predictor/experiments/v2_batter_and_team_features/<span class="new-tag">NEW</span></span><span class="manifest-diff" style="color:var(--ink-faint)">untracked</span></div>
+      <div class="manifest-row"><span class="manifest-path">src/models/implementation_plan.md<span class="new-tag">NEW</span></span><span class="manifest-diff" style="color:var(--ink-faint)">untracked</span></div>
+    </div>
+  </section>
+
+  <section class="block" style="border-bottom:none;">
+    <div class="section-head">
+      <span class="section-num">08</span>
+      <h2 class="section-title">Next</h2>
+    </div>
+    <ol class="next">
+      <li><span class="n">1</span><div class="body"><b>Wire expected_batters_faced into k_predictor</b><span>Join it onto the PA-grain frame, confirm it behaves sensibly against real 2024 data before trusting it in the count model.</span></div></li>
+      <li><span class="n">2</span><div class="body"><b>Combine with per-PA K probability into a real count distribution</b><span>Poisson-binomial sum or Monte Carlo simulation over the expected number of batters faced — the piece that actually answers "P(K &gt; line)."</span></div></li>
+      <li><span class="n">3</span><div class="body"><b>De-vig against a real posted DK line</b><span>Only once the distribution exists does comparing to the market's implied probability mean anything — the actual production go/no-go.</span></div></li>
+    </ol>
+  </section>
+
+</div>
+
+<footer class="page">mlbdk / src/models — session diff, 2026-08-24</footer>
