@@ -1,0 +1,42 @@
+# Baseline config — short_outing_predictor (starting-pitcher short-outing probability)
+# Run: python baseline/model/run.py (from src/models/short_outing_predictor/)
+bucket: mlbdk
+region: us-east-2
+target_column: is_short_outing
+task_type: classification
+date_column: game_date
+time_based_split: true
+test_season: 2025   # held-out — never evaluated during development; final eval only in a future train.py
+val_season: 2024    # iterate against this during development
+metric: pr_auc       # short-outing base rate is well below 50% (most starts go 5+ IP) —
+                      # same imbalance reasoning as k_predictor/bb_predictor
+secondary_metric: roc_auc
+model_name: short_outing_predictor
+
+# Same split as hit_predictor/k_predictor/n_pa_predictor/bb_predictor — this
+# model reuses their feature builders directly and should stay comparable.
+train_seasons:
+  - 2017
+  - 2018
+  - 2019
+  - 2022
+  - 2023
+  - 2024
+  - 2025
+
+# Seasons used to compute last-season rate/IP stats (one season behind each
+# train season)
+feature_seasons:
+  - 2016
+  - 2017
+  - 2018
+  - 2019
+  - 2022
+  - 2023
+  - 2024
+
+drop_columns:
+  - personId
+  - gamepk
+  - game_date
+  - ip   # realized outcome the label is derived from — leaky as a feature

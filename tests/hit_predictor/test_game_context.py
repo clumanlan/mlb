@@ -332,6 +332,56 @@ def test_build_pitcher_start_ip_this_season_first_start_is_nan():
     assert pd.isna(row1['pitcher_this_season_start_ip_avg_ip_per_start'])
 
 
+def _start_ip_four_starts_pitcher_boxscore():
+    return pd.DataFrame([
+        {'personId': '10', 'gamepk': 'g1', 'game_date': pd.Timestamp('2024-04-01'),
+         'game_datetime': pd.Timestamp('2024-04-01 19:00', tz='UTC'), 'game_season': 2024, 'ip': 6.0},
+        {'personId': '10', 'gamepk': 'g2', 'game_date': pd.Timestamp('2024-04-06'),
+         'game_datetime': pd.Timestamp('2024-04-06 19:00', tz='UTC'), 'game_season': 2024, 'ip': 4.0},
+        {'personId': '10', 'gamepk': 'g3', 'game_date': pd.Timestamp('2024-04-11'),
+         'game_datetime': pd.Timestamp('2024-04-11 19:00', tz='UTC'), 'game_season': 2024, 'ip': 5.0},
+        {'personId': '10', 'gamepk': 'g4', 'game_date': pd.Timestamp('2024-04-16'),
+         'game_datetime': pd.Timestamp('2024-04-16 19:00', tz='UTC'), 'game_season': 2024, 'ip': 7.0},
+    ])
+
+
+def _start_ip_four_starts_pbp():
+    return pd.DataFrame([
+        {'pitcher_id': '10', 'pitcher_team_id': 'T1', 'gamepk': g, 'pitcher_role': 'sp'}
+        for g in ['g1', 'g2', 'g3', 'g4']
+    ])
+
+
+def test_build_pitcher_start_ip_this_season_trailing_window_uses_only_last_n_starts():
+    """window=2 (trailing, not expanding): start 4's avg should reflect only
+    starts 2-3 (4.0, 5.0 -> 4.5), not all of starts 1-3 (6.0, 4.0, 5.0 -> 5.0,
+    what the default expanding-season window would give) — the whole point of
+    a trailing window being more responsive to a recent workload trend than
+    a season-to-date average."""
+
+    result = build_pitcher_start_ip_this_season(
+        _start_ip_four_starts_pitcher_boxscore(), _start_ip_four_starts_pbp(), window=2,
+    )
+    row4 = result[result['gamepk'] == 'g4'].iloc[0]
+
+    assert row4['pitcher_last2_start_ip_starts_n'] == 2
+    assert row4['pitcher_last2_start_ip_avg_ip_per_start'] == pytest.approx(4.5)
+
+
+def test_build_pitcher_start_ip_this_season_default_window_is_season_and_unchanged():
+    """window defaults to 'season' — existing callers (build_expected_start_innings,
+    every model's baseline/run.py) must see identical column names/values to
+    before this parameter was added."""
+
+    result = build_pitcher_start_ip_this_season(
+        _start_ip_this_season_pitcher_boxscore(), _start_ip_this_season_pbp()
+    )
+    row3 = result[result['gamepk'] == 'g3'].iloc[0]
+
+    assert row3['pitcher_this_season_start_ip_starts_n'] == 2
+    assert row3['pitcher_this_season_start_ip_avg_ip_per_start'] == pytest.approx(5.0)
+
+
 def _this_season_row(personId='10', gamepk='g1', game_season=2024, starts_n=0, avg_ip=None):
     return {
         'personId': personId, 'gamepk': gamepk, 'game_season': game_season,

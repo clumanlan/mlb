@@ -170,12 +170,21 @@ def build_probable_starters(schedule: pd.DataFrame, game_info: pd.DataFrame) -> 
 # blends the two, shrinking toward this season's own emerging average as starts accumulate
 # rather than trusting last season's number forever.
 
-def build_pitcher_start_ip_this_season(pitcher_boxscore: pd.DataFrame, pbp: pd.DataFrame) -> pd.DataFrame:
-    """One row per (personId, gamepk) SP start: this-season rolling avg IP
-    per start and starts-so-far count, UP TO (not including) this start —
-    expanding within season, shift(1), same _rolling_sum engine as
-    rolling_stats.py (sort_col='game_datetime' for the same doubleheader-
-    ordering reason as the team stats above).
+def build_pitcher_start_ip_this_season(
+    pitcher_boxscore: pd.DataFrame, pbp: pd.DataFrame, window: str | int = 'season'
+) -> pd.DataFrame:
+    """One row per (personId, gamepk) SP start: rolling avg IP per start and
+    starts-so-far count, UP TO (not including) this start, shift(1), same
+    _rolling_sum engine as rolling_stats.py (sort_col='game_datetime' for the
+    same doubleheader-ordering reason as the team stats above).
+
+    window='season' (default, preserves every existing caller's column names
+        and values): expanding within season — a season-to-date average.
+    window=<int>: trailing N-start average, carrying across season
+        boundaries — same 'recent form, not season-to-date' distinction
+        _rolling_sum's own window=<int> branch documents for team stats.
+        Distinct column prefix ('pitcher_last{N}_start_ip_') so a caller can
+        merge both alongside each other without a collision.
     """
     role_lookup = _pitcher_role_lookup(pbp)[['gamepk', 'pitcher_id', 'pitcher_role']].rename(
         columns={'pitcher_id': 'personId'}
@@ -194,7 +203,7 @@ def build_pitcher_start_ip_this_season(pitcher_boxscore: pd.DataFrame, pbp: pd.D
     sp_box['starts_n'] = 1
 
     rolled = _rolling_sum(
-        sp_box, entity_col='personId', cols=['ip', 'starts_n'], window='season', sort_col='game_datetime'
+        sp_box, entity_col='personId', cols=['ip', 'starts_n'], window=window, sort_col='game_datetime'
     )
     rolled['avg_ip_per_start'] = rolled['ip'] / rolled['starts_n'].replace(0, np.nan)
     # starts_n itself is a real, meaningful 0 for a season-opening start (not NaN) —
@@ -204,7 +213,8 @@ def build_pitcher_start_ip_this_season(pitcher_boxscore: pd.DataFrame, pbp: pd.D
     key_cols = ['personId', 'gamepk', 'game_date', 'game_datetime', 'game_season']
     rolled = rolled[key_cols + ['starts_n', 'avg_ip_per_start']]
 
-    return _prefix_stat_cols(rolled, prefix='pitcher_this_season_start_ip_', key_cols=key_cols)
+    prefix = 'pitcher_this_season_start_ip_' if window == 'season' else f'pitcher_last{window}_start_ip_'
+    return _prefix_stat_cols(rolled, prefix=prefix, key_cols=key_cols)
 
 
 def build_expected_start_innings(
