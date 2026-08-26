@@ -39,6 +39,7 @@ from models.hit_predictor.processing.features.season_stats import (
     build_pitcher_start_depth_stats,
     build_pitcher_stats,
     build_pitcher_stats_all_roles,
+    build_pitcher_last_known_season_start_pa,
 )
 
 
@@ -1502,3 +1503,56 @@ def test_build_team_avg_start_pa_computes_separately_per_team():
 
     assert row_t1['team_last_season_avg_pa_per_start'] == pytest.approx((5.0 * 10 + 4.0 * 5) / 15)
     assert row_t2['team_last_season_avg_pa_per_start'] == pytest.approx(3.0)
+
+
+# --------------------------- PITCHER LAST-KNOWN-SEASON START PA (batters_faced_predictor v3, cold start) --------------------------- #
+# build_pitcher_start_pa_stats (above) is frozen — other models depend on its
+# current fixed +1-season-back behavior. This is a separate, additive function
+# for the same underlying stat, looking back across a full gap season (injury,
+# demotion) rather than only ever the immediately-prior one.
+
+def _known_season_start_pa_row(pitcher_id='10', gamepk='g1', game_date='2021-04-01',
+                                game_datetime='2021-04-01 19:00', game_season=2021, play_id=1):
+    return {
+        'pitcher_id': pitcher_id, 'pitcher_team_id': 'T1', 'gamepk': gamepk,
+        'game_date': pd.Timestamp(game_date), 'game_datetime': pd.Timestamp(game_datetime),
+        'game_season': game_season, 'pitcher_role': 'sp', 'play_id': play_id, 'pitch_number': 1,
+        'play_result': 'Single',
+    }
+
+
+def test_build_pitcher_last_known_season_start_pa_looks_back_across_a_gap_season():
+    """Pitcher '10' starts in 2021 only (nothing in 2022, nothing of his own
+    in 2023). Pitcher '99' has a 2023 start purely so game_season=2023
+    appears in the global season list at all. build_pitcher_start_pa_stats'
+    fixed +1 shift CANNOT surface pitcher 10's 2021 data for 2023 games (he
+    has no 2022 row to shift from) — this function must."""
+
+    rows = [
+        _known_season_start_pa_row(pitcher_id='10', gamepk='g1', play_id=1),
+        _known_season_start_pa_row(pitcher_id='10', gamepk='g1', play_id=2),
+        _known_season_start_pa_row(pitcher_id='10', gamepk='g1', play_id=3),
+        _known_season_start_pa_row(
+            pitcher_id='99', gamepk='g9', game_date='2023-04-01', game_datetime='2023-04-01 19:00',
+            game_season=2023, play_id=1,
+        ),
+    ]
+
+    result = build_pitcher_last_known_season_start_pa(pd.DataFrame(rows))
+
+    row = result[(result['personId'] == '10') & (result['game_season'] == 2023)].iloc[0]
+    assert row['pitcher_last_known_season_start_pa_avg_pa_per_start'] == pytest.approx(3.0)
+    assert row['pitcher_last_known_season_start_pa_n_starts'] == 1
+
+
+def test_build_pitcher_last_known_season_start_pa_no_prior_starts_is_nan():
+    """A pitcher whose only pbp row in the data IS the target season (his
+    first-ever start) has nothing strictly before it to look back to."""
+
+    rows = [_known_season_start_pa_row(pitcher_id='20', gamepk='g1', game_season=2023,
+                                        game_date='2023-04-01', game_datetime='2023-04-01 19:00', play_id=1)]
+
+    result = build_pitcher_last_known_season_start_pa(pd.DataFrame(rows))
+
+    row = result[(result['personId'] == '20') & (result['game_season'] == 2023)].iloc[0]
+    assert pd.isna(row['pitcher_last_known_season_start_pa_avg_pa_per_start'])

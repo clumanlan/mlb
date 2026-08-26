@@ -160,3 +160,26 @@ class TestApiGet:
             from odds_fetch import api_get
             result = api_get("http://example.com", {}, api_key="test-key")
             assert result == {"data": "value"}
+
+    def test_api_get_captures_requests_used_header(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"data": "value"}
+        mock_resp.headers = {"x-requests-remaining": "13", "x-requests-used": "487"}
+
+        with patch("odds_fetch.requests.get", return_value=mock_resp):
+            import odds_fetch
+            odds_fetch.api_get("http://example.com", {}, api_key="test-key")
+            assert odds_fetch.get_last_usage() == 487
+
+    def test_get_last_usage_returns_none_when_header_missing(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"data": "value"}
+        mock_resp.headers = {}
+
+        with patch("odds_fetch.requests.get", return_value=mock_resp):
+            import odds_fetch
+            odds_fetch._last_requests_used = None
+            odds_fetch.api_get("http://example.com", {}, api_key="test-key")
+            assert odds_fetch.get_last_usage() is None

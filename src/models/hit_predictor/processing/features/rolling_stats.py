@@ -889,3 +889,47 @@ def build_team_batter_strikeout_rolling_feats(
     rolled = rolled[key_cols + final_cols]
 
     return _prefix_stat_cols(rolled, prefix=_rolling_prefix('team', window), key_cols=key_cols)
+
+
+def build_team_batter_onbase_rolling_feats(
+    pbp: pd.DataFrame, batter_boxscore: pd.DataFrame, window: str | int,
+) -> pd.DataFrame:
+    """Mirrors build_team_batter_strikeout_rolling_feats above exactly (same
+    starting-lineup-only pooling, same 'roll sums, divide once' rate rule) —
+    swaps pa_strikeout_n for pa_walk_n/pa_hit_n/pa_hbp_n, both already
+    computed by _batter_pa_outcome_per_game. Built for
+    batters_faced_predictor's opposing-lineup-traffic feature: more walks/
+    hits per inning means more total batters faced for the same number of
+    outs recorded, independent of strikeout rate."""
+    _validate_window(window)
+
+    starters = _create_batting_order(batter_boxscore)[['gamepk', 'batter_id']]
+    per_batter_game = _batter_pa_outcome_per_game(pbp)[
+        PBP_BATTER_KEY_COLS + ['pa_total', 'pa_walk_n', 'pa_hit_n', 'pa_hbp_n']
+    ]
+    team_lookup = pbp[['batter_id', 'gamepk', 'batter_team_id']].drop_duplicates()
+
+    starters_pa = per_batter_game.merge(starters, on=['gamepk', 'batter_id'], how='inner')
+    starters_pa = starters_pa.merge(team_lookup, on=['batter_id', 'gamepk'], how='left')
+
+    sum_cols = ['pa_total', 'pa_walk_n', 'pa_hit_n', 'pa_hbp_n']
+    team_per_game = (
+        starters_pa
+        .groupby(['batter_team_id', 'gamepk', 'game_date', 'game_season'])[sum_cols]
+        .sum()
+        .reset_index()
+    )
+
+    key_cols = ['batter_team_id', 'gamepk', 'game_date', 'game_season']
+    rolled = _rolling_sum(team_per_game, entity_col='batter_team_id', cols=sum_cols, window=window)
+    rolled = rolled.assign(
+        walk_rate=lambda x: x['pa_walk_n'] / x['pa_total'].replace(0, np.nan),
+        on_base_rate=lambda x: (
+            (x['pa_walk_n'] + x['pa_hit_n'] + x['pa_hbp_n']) / x['pa_total'].replace(0, np.nan)
+        ),
+    )
+
+    final_cols = sum_cols + ['walk_rate', 'on_base_rate']
+    rolled = rolled[key_cols + final_cols]
+
+    return _prefix_stat_cols(rolled, prefix=_rolling_prefix('team', window), key_cols=key_cols)

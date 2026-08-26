@@ -6,6 +6,7 @@
 // <ModelPredictions /> below <TodaysSlate /> — no other changes needed here.
 // This pattern is called "component composition".
 import PipelineStatus from './components/PipelineStatus.jsx'
+import SeasonCompleteness from './components/SeasonCompleteness.jsx'
 import TodaysSlate from './components/TodaysSlate.jsx'
 
 // Format today's date as "Saturday, May 9, 2026" for the header.
@@ -27,6 +28,7 @@ export default function App() {
 
       <main className="app-main">
         <PipelineStatus />
+        <SeasonCompleteness />
         <TodaysSlate />
 
         {/* Stage 2: <ModelPredictions /> goes here when built */}

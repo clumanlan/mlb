@@ -13,7 +13,12 @@ from models.hit_predictor.processing.features.game_context import (
     build_expected_start_innings,
     build_pitcher_start_pa_this_season,
     build_expected_batters_faced,
+    build_batter_slot_expansion,
     build_pitcher_role_by_inning,
+    build_batters_faced_residual_bins,
+    build_batters_faced_distribution,
+    build_pitcher_rest_days,
+    build_pitcher_workload_density,
 )
 
 
@@ -546,6 +551,132 @@ def test_build_pitcher_start_pa_this_season_carries_pitchers_current_team_throug
     assert result[result['gamepk'] == 'g2'].iloc[0]['pitcher_team_id'] == 'T2'
 
 
+# --------------------------- PITCHER REST DAYS / WORKLOAD DENSITY (batters_faced_predictor v2) --------------------------- #
+# Mirrors build_team_rest_days's shape (sort by game_datetime, .diff() per entity)
+# but keyed on the pitcher (personId) instead of team_id, and scoped to
+# pitcher_role == 'sp' like every other start-grain builder in this file — a
+# relief appearance in between two starts isn't "his last start."
+
+def test_build_pitcher_rest_days_computes_calendar_days_since_last_start():
+    rows = [
+        _start_pa_this_season_pbp_row(gamepk='g1', play_id=1),
+        _start_pa_this_season_pbp_row(
+            gamepk='g2', game_date='2024-04-05', game_datetime='2024-04-05 19:00', play_id=1,
+        ),
+    ]
+
+    result = build_pitcher_rest_days(pd.DataFrame(rows))
+
+    row_g2 = result[result['gamepk'] == 'g2'].iloc[0]
+    assert row_g2['pitcher_days_since_last_start'] == 4
+
+
+def test_build_pitcher_rest_days_first_start_is_nan():
+    rows = [_start_pa_this_season_pbp_row(gamepk='g1', play_id=1)]
+
+    result = build_pitcher_rest_days(pd.DataFrame(rows))
+
+    assert pd.isna(result.iloc[0]['pitcher_days_since_last_start'])
+
+
+def test_build_pitcher_rest_days_ignores_bullpen_appearances_between_starts():
+    """A relief outing between two starts must not count as "his last start"
+    — g3's rest is measured from g1 (the last SP start), not g2 (a bullpen
+    appearance 2 days before g3)."""
+
+    rows = [
+        _start_pa_this_season_pbp_row(gamepk='g1', game_date='2024-04-01', game_datetime='2024-04-01 19:00', play_id=1),
+        _start_pa_this_season_pbp_row(
+            gamepk='g2', game_date='2024-04-03', game_datetime='2024-04-03 19:00', play_id=1,
+            pitcher_role='bullpen',
+        ),
+        _start_pa_this_season_pbp_row(gamepk='g3', game_date='2024-04-06', game_datetime='2024-04-06 19:00', play_id=1),
+    ]
+
+    result = build_pitcher_rest_days(pd.DataFrame(rows))
+
+    row_g3 = result[result['gamepk'] == 'g3'].iloc[0]
+    assert row_g3['pitcher_days_since_last_start'] == 5
+
+
+def _rest_days_row(personId='10', gamepk='g1', pitcher_days_since_last_start=None):
+    return {'personId': personId, 'gamepk': gamepk, 'pitcher_days_since_last_start': pitcher_days_since_last_start}
+
+
+def _workload_pitcher_boxscore(personId='10', gamepk='g1', game_date='2024-04-01',
+                                game_datetime='2024-04-01 19:00', p=90):
+    ts = pd.Timestamp(game_datetime)
+    ts = ts.tz_localize('UTC') if ts.tzinfo is None else ts
+    return {
+        'personId': personId, 'gamepk': gamepk, 'game_date': pd.Timestamp(game_date),
+        'game_datetime': ts, 'p': p,
+    }
+
+
+def _workload_pbp_row(pitcher_id='10', gamepk='g1', game_date='2024-04-01',
+                       game_datetime='2024-04-01 19:00', play_id=1):
+    return {
+        'pitcher_id': pitcher_id, 'gamepk': gamepk, 'game_date': pd.Timestamp(game_date),
+        'game_datetime': pd.Timestamp(game_datetime, tz='UTC'), 'pitcher_role': 'sp',
+        'play_id': play_id, 'pitch_number': 1, 'play_result': 'Single',
+    }
+
+
+def test_build_pitcher_workload_density_carries_forward_last_start_pitch_count():
+    boxscore = pd.DataFrame([
+        _workload_pitcher_boxscore(gamepk='g1', p=90),
+        _workload_pitcher_boxscore(gamepk='g2', game_date='2024-04-05', game_datetime='2024-04-05 19:00', p=100),
+    ])
+    pbp = pd.DataFrame([
+        _workload_pbp_row(gamepk='g1'),
+        _workload_pbp_row(gamepk='g2', game_date='2024-04-05', game_datetime='2024-04-05 19:00'),
+    ])
+    rest_days = pd.DataFrame([
+        _rest_days_row(gamepk='g1', pitcher_days_since_last_start=None),
+        _rest_days_row(gamepk='g2', pitcher_days_since_last_start=4),
+    ])
+
+    result = build_pitcher_workload_density(boxscore, pbp, rest_days)
+
+    row_g2 = result[result['gamepk'] == 'g2'].iloc[0]
+    assert row_g2['pitcher_last_start_pitches'] == 90
+
+
+def test_build_pitcher_workload_density_first_start_is_nan():
+    boxscore = pd.DataFrame([_workload_pitcher_boxscore(gamepk='g1', p=90)])
+    pbp = pd.DataFrame([_workload_pbp_row(gamepk='g1')])
+    rest_days = pd.DataFrame([_rest_days_row(gamepk='g1', pitcher_days_since_last_start=None)])
+
+    result = build_pitcher_workload_density(boxscore, pbp, rest_days)
+
+    assert pd.isna(result.iloc[0]['pitcher_last_start_pitches'])
+
+
+def test_build_pitcher_workload_density_divides_by_rest_days_and_guards_zero():
+    boxscore = pd.DataFrame([
+        _workload_pitcher_boxscore(gamepk='g1', p=90),
+        _workload_pitcher_boxscore(gamepk='g2', game_date='2024-04-04', game_datetime='2024-04-04 19:00', p=80),
+        _workload_pitcher_boxscore(gamepk='g3', game_date='2024-04-04', game_datetime='2024-04-04 23:00', p=70),
+    ])
+    pbp = pd.DataFrame([
+        _workload_pbp_row(gamepk='g1'),
+        _workload_pbp_row(gamepk='g2', game_date='2024-04-04', game_datetime='2024-04-04 19:00'),
+        _workload_pbp_row(gamepk='g3', game_date='2024-04-04', game_datetime='2024-04-04 23:00'),
+    ])
+    rest_days = pd.DataFrame([
+        _rest_days_row(gamepk='g1', pitcher_days_since_last_start=None),
+        _rest_days_row(gamepk='g2', pitcher_days_since_last_start=3),
+        _rest_days_row(gamepk='g3', pitcher_days_since_last_start=0),
+    ])
+
+    result = build_pitcher_workload_density(boxscore, pbp, rest_days)
+
+    row_g2 = result[result['gamepk'] == 'g2'].iloc[0]
+    row_g3 = result[result['gamepk'] == 'g3'].iloc[0]
+    assert row_g2['pitcher_workload_density'] == pytest.approx(30.0)
+    assert pd.isna(row_g3['pitcher_workload_density'])
+
+
 def _pa_this_season_row(personId='10', gamepk='g1', game_season=2024, pitcher_team_id='T1',
                          starts_n=0, avg_pa=None):
     return {
@@ -661,6 +792,105 @@ def test_build_expected_batters_faced_exposes_raw_components_not_just_the_blend(
         assert col in result.columns
 
 
+# --------------------------- BATTER SLOT EXPANSION (count-distribution check) --------------------------- #
+# Same expansion shape as build_pitcher_role_by_inning above (cross join a pregame
+# estimate against a fixed range, then tag/filter), but on the batter-lineup axis
+# instead of innings: expected_batters_faced -> one synthetic row per slot, cycling
+# through the real 9-batter lineup order. Feeds k_predictor's total-strikeout
+# count-distribution check — see k_predictor/experiments/count_distribution_check/.
+
+def _slot_expansion_pitcher_starts():
+    return pd.DataFrame([
+        {'gamepk': 'g1', 'expected_pitcher_key_id': '10', 'expected_batters_faced': 11.0},
+    ])
+
+
+def _slot_expansion_batting_order(gamepk='g1'):
+    return pd.DataFrame([
+        {'gamepk': gamepk, 'batter_id': f'B{i}', 'batting_order': i} for i in range(1, 10)
+    ])
+
+
+def test_build_batter_slot_expansion_cycles_lineup_positions_and_caps_times_through_order():
+    """11 expected batters faced = one full 9-batter cycle plus 2 more: slot 10
+    must cycle back to lineup position 1 (the leadoff hitter again), 2nd time
+    through the order. Slot 1 is the 1st time through."""
+
+    result = build_batter_slot_expansion(_slot_expansion_pitcher_starts(), _slot_expansion_batting_order())
+
+    assert len(result) == 11
+    row1 = result[result['slot'] == 1].iloc[0]
+    row10 = result[result['slot'] == 10].iloc[0]
+
+    assert row1['lineup_position'] == 1
+    assert row1['expected_times_through_order'] == 1
+    assert row10['lineup_position'] == 1
+    assert row10['expected_times_through_order'] == 2
+
+
+def test_build_batter_slot_expansion_caps_times_through_order_beyond_third_cycle():
+    """A long outing (28 expected batters faced = cycle 4 for the final slots)
+    must cap expected_times_through_order at 3 — the same Lichtman-research-
+    based cap _add_pbp_times_through_order and expected_role.py already use
+    everywhere else this concept appears, so the trained classifier sees the
+    same feature shape it was trained on."""
+
+    pitcher_starts = pd.DataFrame([
+        {'gamepk': 'g1', 'expected_pitcher_key_id': '10', 'expected_batters_faced': 28.0},
+    ])
+
+    result = build_batter_slot_expansion(pitcher_starts, _slot_expansion_batting_order())
+
+    row28 = result[result['slot'] == 28].iloc[0]
+    assert row28['expected_times_through_order'] == 3
+
+
+def test_build_batter_slot_expansion_rounds_estimate_and_joins_real_batter_id():
+    """expected_batters_faced is itself a blended float (build_expected_batters_faced's
+    output) — must round, not truncate, to decide slot count. Each slot must
+    carry the SPECIFIC real batter_id in that lineup position, not just the
+    position number."""
+
+    pitcher_starts = pd.DataFrame([
+        {'gamepk': 'g1', 'expected_pitcher_key_id': '10', 'expected_batters_faced': 21.6},
+    ])
+
+    result = build_batter_slot_expansion(pitcher_starts, _slot_expansion_batting_order())
+
+    assert len(result) == 22  # round(21.6) == 22, not truncated to 21
+    row3 = result[result['slot'] == 3].iloc[0]
+    assert row3['batter_id'] == 'B3'
+
+
+def test_build_batter_slot_expansion_deduplicates_lineup_position_collisions():
+    """Real MLB batting-order data isn't always a clean 1:1 (gamepk,
+    batting_order) -> batter_id mapping — a substitution mid-game is
+    sometimes logged sharing the SAME lineup-slot number as the starter it
+    replaced, rather than a distinct 501/502-style code (confirmed against
+    real 2024 data: ~half of all (gamepk, batting_order) pairs had 2 batter
+    rows). A lineup-position lookup must still resolve to exactly ONE batter
+    per slot — the join key here is the slot NUMBER, not batter identity, so
+    an unresolved collision silently doubles every downstream slot instead
+    of erroring. Must dedupe to one row per (gamepk, batting_order),
+    deterministically (first occurrence), rather than fan out."""
+
+    batting_order = pd.DataFrame([
+        {'gamepk': 'g1', 'batter_id': 'B5_starter', 'batting_order': 5},
+        {'gamepk': 'g1', 'batter_id': 'B5_sub', 'batting_order': 5},  # collision — same slot
+    ] + [
+        {'gamepk': 'g1', 'batter_id': f'B{i}', 'batting_order': i} for i in range(1, 10) if i != 5
+    ])
+    pitcher_starts = pd.DataFrame([
+        {'gamepk': 'g1', 'expected_pitcher_key_id': '10', 'expected_batters_faced': 9.0},
+    ])
+
+    result = build_batter_slot_expansion(pitcher_starts, batting_order)
+
+    assert len(result) == 9  # exactly one row per slot, not 10 from the collision
+    slot5 = result[result['slot'] == 5].iloc[0]
+    assert slot5['batter_id'] == 'B5_starter'
+
+
 def test_build_pitcher_role_by_inning_rounds_up_and_splits_sp_vs_bullpen():
     """expected_start_innings=5.4 -> ceil=6 -> innings 1-6 are 'sp' (a
     partial inning pitched still counts as that inning belonging to the
@@ -724,3 +954,154 @@ def test_build_pitcher_role_by_inning_handles_multiple_games_independently():
     a_sp = result[(result['team_id'] == 'A') & (result['pitcher_role'] == 'sp')]
     assert len(h_sp) == 5
     assert len(a_sp) == 7
+
+
+# --------------------------- BATTERS-FACED RESIDUAL DISTRIBUTION --------------------------- #
+# build_expected_batters_faced (above) is a fixed POINT estimate — k_predictor's
+# count-distribution-check diagnostic showed its error scales with
+# expected_batters_faced_weight (thin this-season sample = bigger miss). These two
+# functions turn that point estimate + known error-correlate into a real distribution:
+# fit an empirical residual histogram per weight bin (build_batters_faced_residual_bins),
+# then shift/scatter that bin's histogram around a new start's own point estimate
+# (build_batters_faced_distribution). See ROADMAP.md's batters-faced-distribution plan.
+
+def test_build_batters_faced_residual_bins_single_bin_is_unconditional():
+    """n_bins=1 must collapse to the plain unconditional residual histogram —
+    4 starts, residuals [0, 1, 1, 2] -> pmf {0: 0.25, 1: 0.5, 2: 0.25}, and the
+    single bin's edges must span the entire real line (no future weight value
+    can fall outside it)."""
+
+    fit_starts = pd.DataFrame([
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.1, 'realized_batters_faced': 10},
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.4, 'realized_batters_faced': 11},
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.6, 'realized_batters_faced': 11},
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.9, 'realized_batters_faced': 12},
+    ])
+
+    result = build_batters_faced_residual_bins(fit_starts, n_bins=1)
+
+    assert result['weight_bin'].nunique() == 1
+    pmf = dict(zip(result['residual'], result['probability']))
+    assert pmf == pytest.approx({0: 0.25, 1: 0.5, 2: 0.25})
+    assert result['weight_bin_lower'].iloc[0] == -np.inf
+    assert result['weight_bin_upper'].iloc[0] == np.inf
+
+
+def test_build_batters_faced_residual_bins_two_bins_isolate_own_residuals():
+    """Two bins must NOT pool their residuals — a low-weight (thin-sample)
+    start's residual must never leak into the high-weight bin's histogram,
+    and vice versa."""
+
+    fit_starts = pd.DataFrame([
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.0, 'realized_batters_faced': 10},  # residual 0
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.1, 'realized_batters_faced': 12},  # residual 2
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.8, 'realized_batters_faced': 9},   # residual -1
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.9, 'realized_batters_faced': 11},  # residual 1
+    ])
+
+    result = build_batters_faced_residual_bins(fit_starts, n_bins=2)
+
+    low_bin = result[result['weight_bin'] == result['weight_bin'].min()]
+    high_bin = result[result['weight_bin'] == result['weight_bin'].max()]
+
+    assert dict(zip(low_bin['residual'], low_bin['probability'])) == pytest.approx({0: 0.5, 2: 0.5})
+    assert dict(zip(high_bin['residual'], high_bin['probability'])) == pytest.approx({-1: 0.5, 1: 0.5})
+    assert -1 not in low_bin['residual'].tolist()
+    assert 1 not in low_bin['residual'].tolist()
+
+
+def test_build_batters_faced_residual_bins_edges_are_contiguous_and_span_full_range():
+    """Bin edges must be contiguous (no gap a future weight value could fall
+    into) and the outer edges must be -inf/+inf so every possible weight
+    resolves to exactly one bin — same 'always resolves' contract
+    build_expected_batters_faced's own fallback cascade guarantees."""
+
+    fit_starts = pd.DataFrame([
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.0, 'realized_batters_faced': 10},
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.1, 'realized_batters_faced': 12},
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.8, 'realized_batters_faced': 9},
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.9, 'realized_batters_faced': 11},
+    ])
+
+    result = build_batters_faced_residual_bins(fit_starts, n_bins=2)
+
+    bins = result[['weight_bin', 'weight_bin_lower', 'weight_bin_upper']].drop_duplicates().sort_values('weight_bin')
+    assert bins['weight_bin_lower'].iloc[0] == -np.inf
+    assert bins['weight_bin_upper'].iloc[-1] == np.inf
+    assert bins['weight_bin_upper'].iloc[0] == bins['weight_bin_lower'].iloc[1]
+
+
+def test_build_batters_faced_residual_bins_drops_rows_with_missing_expected_batters_faced():
+    """Real data has a small number of starts with no expected_batters_faced
+    at all — build_expected_batters_faced's 3-level cascade (pitcher -> team
+    -> league) still returns NaN when even the this-season fallback has no
+    starts yet (a pitcher's true first-ever MLB start with no league data
+    for that season, confirmed against real 2018-2023 fit data). These rows
+    must be dropped before computing residuals, not crash the int cast —
+    a NaN residual can't be assigned to any bin anyway."""
+
+    fit_starts = pd.DataFrame([
+        {'expected_batters_faced': 10.0, 'expected_batters_faced_weight': 0.5, 'realized_batters_faced': 11},
+        {'expected_batters_faced': np.nan, 'expected_batters_faced_weight': 0.5, 'realized_batters_faced': 8},
+    ])
+
+    result = build_batters_faced_residual_bins(fit_starts, n_bins=1)
+
+    assert dict(zip(result['residual'], result['probability'])) == pytest.approx({1: 1.0})
+
+
+# --------------------------- BATTERS-FACED DISTRIBUTION --------------------------- #
+
+def test_build_batters_faced_distribution_shifts_residual_pmf_by_point_estimate():
+    """A bin's residual pmf {0: 0.5, 2: 0.5} applied to a start with
+    expected_batters_faced=10.4 (rounds to 10) must land mass at n=10 and
+    n=12, nowhere else."""
+
+    residual_bins = pd.DataFrame([
+        {'weight_bin': 0, 'weight_bin_lower': -np.inf, 'weight_bin_upper': np.inf, 'residual': 0, 'probability': 0.5},
+        {'weight_bin': 0, 'weight_bin_lower': -np.inf, 'weight_bin_upper': np.inf, 'residual': 2, 'probability': 0.5},
+    ])
+    expected_pa = pd.DataFrame([{'expected_batters_faced': 10.4, 'expected_batters_faced_weight': 0.05}])
+
+    result = build_batters_faced_distribution(expected_pa, residual_bins, max_slots=15)
+    pmf = result['batters_faced_pmf'].iloc[0]
+
+    assert len(pmf) == 16
+    assert pmf[10] == pytest.approx(0.5)
+    assert pmf[12] == pytest.approx(0.5)
+    assert pmf.sum() == pytest.approx(1.0)
+
+
+def test_build_batters_faced_distribution_clips_and_accumulates_at_boundary():
+    """Residuals that push below 0 must clip to n=0 and ACCUMULATE mass
+    there, not overwrite each other — {-5: 0.4, -3: 0.6} against
+    expected_batters_faced=2.0 gives raw values -3 and -1, both < 0, both
+    clip to n=0: pmf[0] must be 0.4+0.6=1.0, not just the last write."""
+
+    residual_bins = pd.DataFrame([
+        {'weight_bin': 0, 'weight_bin_lower': -np.inf, 'weight_bin_upper': np.inf, 'residual': -5, 'probability': 0.4},
+        {'weight_bin': 0, 'weight_bin_lower': -np.inf, 'weight_bin_upper': np.inf, 'residual': -3, 'probability': 0.6},
+    ])
+    expected_pa = pd.DataFrame([{'expected_batters_faced': 2.0, 'expected_batters_faced_weight': 0.05}])
+
+    result = build_batters_faced_distribution(expected_pa, residual_bins, max_slots=15)
+    pmf = result['batters_faced_pmf'].iloc[0]
+
+    assert pmf[0] == pytest.approx(1.0)
+    assert pmf.sum() == pytest.approx(1.0)
+
+
+def test_build_batters_faced_distribution_always_returns_full_length_array():
+    """Regardless of how sparse a bin's own residual support is, the output
+    pmf must always be the full max_slots+1 length — matches
+    poisson_binomial_mixture_pmf's fixed-length contract."""
+
+    residual_bins = pd.DataFrame([
+        {'weight_bin': 0, 'weight_bin_lower': -np.inf, 'weight_bin_upper': np.inf, 'residual': 1, 'probability': 1.0},
+    ])
+    expected_pa = pd.DataFrame([{'expected_batters_faced': 5.0, 'expected_batters_faced_weight': 0.05}])
+
+    result = build_batters_faced_distribution(expected_pa, residual_bins, max_slots=20)
+    pmf = result['batters_faced_pmf'].iloc[0]
+
+    assert len(pmf) == 21

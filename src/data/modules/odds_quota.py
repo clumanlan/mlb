@@ -20,11 +20,11 @@ def check_quota(year, month, limit=500, warn_threshold=0.9):
     return {"current": current, "warn": warn, "stop": stop}
 
 
-def increment_monthly_usage(year, month, current_count):
+def set_monthly_usage(year, month, used_count):
     ssm = boto3.client("ssm")
     ssm.put_parameter(
         Name=f"/mlb/odds-api/requests-used/{year}/{month}",
-        Value=str(current_count + 1),
+        Value=str(used_count),
         Type="String",
         Overwrite=True,
     )

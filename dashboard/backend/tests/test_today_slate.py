@@ -33,8 +33,12 @@ SCHEDULE = [
 ]
 
 LINEUP_STATES = {
-    "745123": {"status": "PENDING"},
-    "745124": {"status": "CONFIRMED"},
+    "date": "2026-05-09",
+    "last_checked": "2026-05-09T12:00:00",
+    "games": {
+        "745123": "PENDING",
+        "745124": "CONFIRMED",
+    },
 }
 
 ODDS_DF = pd.DataFrame([

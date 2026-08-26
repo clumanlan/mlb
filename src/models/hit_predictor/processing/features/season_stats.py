@@ -354,6 +354,47 @@ def build_pitcher_start_pa_stats(pbp: pd.DataFrame) -> pd.DataFrame:
     return _shift_to_last_season(_create_pitcher_start_pa_stats(pbp))
 
 
+def build_pitcher_last_known_season_start_pa(pbp: pd.DataFrame) -> pd.DataFrame:
+    """One row per (personId, game_season): that pitcher's avg PA/start and
+    start count from the most recent PRIOR season in which he actually
+    started — not necessarily the immediately-prior one. NaN if he has never
+    started in any prior season in the data (true rookie's first-ever start).
+
+    build_pitcher_start_pa_stats above only ever looks exactly one season
+    back (_shift_to_last_season's fixed +1) and is frozen — other models
+    depend on that exact behavior. A pitcher who missed a full season
+    (injury, demotion, rehab) gets NaN there even with a perfectly good
+    track record from two or three seasons earlier, so this is a separate,
+    additive function rather than a parameter on the frozen one.
+
+    Implemented via merge_asof (backward, no exact match) against
+    _create_pitcher_start_pa_stats' raw per-season table — strictly more
+    correct than a fixed shift for "most recent prior season with data,
+    whatever the gap."
+    """
+    raw = _create_pitcher_start_pa_stats(pbp)
+
+    all_seasons = pd.DataFrame({'game_season': sorted(pbp['game_season'].unique())})
+    scaffold = raw[['personId']].drop_duplicates().merge(all_seasons, how='cross')
+    scaffold = scaffold.sort_values(['game_season', 'personId']).reset_index(drop=True)
+
+    lookup = raw[[
+        'personId', 'game_season', 'pitcher_season_start_pa_avg_pa_per_start', 'pitcher_season_start_pa_n_starts',
+    ]].sort_values(['game_season', 'personId']).reset_index(drop=True)
+
+    merged = pd.merge_asof(
+        scaffold, lookup, on='game_season', by='personId', direction='backward', allow_exact_matches=False,
+    )
+
+    return _prefix_stat_cols(
+        merged.rename(columns={
+            'pitcher_season_start_pa_avg_pa_per_start': 'avg_pa_per_start',
+            'pitcher_season_start_pa_n_starts': 'n_starts',
+        }),
+        prefix='pitcher_last_known_season_start_pa_', key_cols=['personId', 'game_season'],
+    )
+
+
 def build_league_avg_start_pa(pitcher_start_pa_stats: pd.DataFrame) -> pd.DataFrame:
     """League-wide average batters faced/SP start last season, weighted by
     each pitcher's own start count — same rationale as build_league_avg_start_ip.

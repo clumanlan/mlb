@@ -6,6 +6,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+import completeness_audit
 import s3_client
 
 CT = zoneinfo.ZoneInfo("America/Chicago")
@@ -156,7 +157,7 @@ def today_slate(date_param: Optional[str] = Query(default=None, alias="date")):
     games = []
     for game in sorted(schedule, key=lambda g: g["game_time_utc"]):
         game_pk_str = str(game["game_pk"])
-        lineup_status = lineup_states['games'].get(game_pk_str, {})
+        lineup_status = lineup_states.get("games", {}).get(game_pk_str, "PENDING")
         home = game["home_team_name"]
         away = game["away_team_name"]
         games.append({
@@ -173,6 +174,16 @@ def today_slate(date_param: Optional[str] = Query(default=None, alias="date")):
         
     lineup_last_checked = lineup_states.get("last_checked") if isinstance(lineup_states, dict) else None
     return {"date": target_date, "games": games, "games_sorted_by_time": True, "lineup_last_checked": lineup_last_checked}
+
+
+@app.get("/api/season-completeness")
+def season_completeness(year: Optional[str] = Query(default=None)):
+    """
+    Audit a season's schedule vs. the batter_boxscore/pitcher_boxscore/playbyplay
+    tables k_predictor depends on. Defaults to the current year.
+    """
+    target_year = year or str(date.today().year)
+    return completeness_audit.run_season_completeness_audit(S3_BUCKET, target_year)
 
 
 @app.get("/api/pipeline-status")

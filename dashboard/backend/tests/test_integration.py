@@ -20,11 +20,18 @@ client = TestClient(app)
 
 @pytest.mark.integration
 class TestS3ClientIntegration:
-    def test_reads_schedule_parquet_for_date(self, run_date):
-        """Reads the legacy schedule Parquet (daily_mlb_fetch path) for the given date."""
-        year = run_date[:4]
-        df = s3_client.get_s3_parquet("mlbdk", f"raw_data/games/schedule/{year}/schedule_{run_date}.parquet")
-        assert not df.empty, f"expected rows in schedule Parquet for {run_date}"
+    def test_reads_schedule_parquet_for_date(self):
+        """
+        Reads the legacy schedule Parquet (daily_mlb_fetch path) for a fixed historical date.
+
+        Pinned rather than parametrized by `run_date`: the pipeline migrated to the
+        new raw_data/schedule/{year}/{date}.json path (daily_schedule_fetch) around
+        2026-05-09 and stopped writing this legacy Parquet path after that date. The
+        dashboard's fallback logic (_load_schedule) still needs to support old dates
+        that only ever had the legacy file, so this test targets one of those.
+        """
+        df = s3_client.get_s3_parquet("mlbdk", "raw_data/games/schedule/2026/schedule_2026-05-09.parquet")
+        assert not df.empty, "expected rows in schedule Parquet for 2026-05-09"
         for col in ("game_id", "home_name", "away_name", "game_datetime", "venue_name"):
             assert col in df.columns, f"missing column: {col}"
 

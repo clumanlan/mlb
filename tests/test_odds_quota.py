@@ -32,29 +32,29 @@ class TestCheckQuota:
             assert result["stop"] is True
 
 
-class TestIncrementMonthlyUsage:
-    def test_increment_writes_new_count_to_ssm(self):
+class TestSetMonthlyUsage:
+    def test_set_monthly_usage_writes_given_count_to_ssm(self):
         mock_ssm = MagicMock()
 
         with patch("odds_quota.boto3.client", return_value=mock_ssm):
-            from odds_quota import increment_monthly_usage
-            increment_monthly_usage(year="2026", month="04", current_count=42)
+            from odds_quota import set_monthly_usage
+            set_monthly_usage(year="2026", month="04", used_count=487)
             mock_ssm.put_parameter.assert_called_once_with(
                 Name="/mlb/odds-api/requests-used/2026/04",
-                Value="43",
+                Value="487",
                 Type="String",
                 Overwrite=True,
             )
 
-    def test_increment_from_zero(self):
+    def test_set_monthly_usage_does_not_add_one(self):
         mock_ssm = MagicMock()
 
         with patch("odds_quota.boto3.client", return_value=mock_ssm):
-            from odds_quota import increment_monthly_usage
-            increment_monthly_usage(year="2026", month="04", current_count=0)
+            from odds_quota import set_monthly_usage
+            set_monthly_usage(year="2026", month="04", used_count=0)
             mock_ssm.put_parameter.assert_called_once_with(
                 Name="/mlb/odds-api/requests-used/2026/04",
-                Value="1",
+                Value="0",
                 Type="String",
                 Overwrite=True,
             )

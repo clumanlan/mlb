@@ -124,7 +124,7 @@ Every Lambda must write a status JSON to S3 at the end of execution (success or 
 
 The goal is to verify that all games were captured at each step — a drop from 15 to 13 in `batter_boxscore` signals a data gap.
 
-**Integration pattern:** capture `started_at` before the try block, then use `try/except`. On success call `write_status` before returning; on failure call `write_status` in the except block then re-raise (or return 500 for `daily_odds_fetch`). Import as a sibling module (`from status_writer import write_status`).
+**Integration pattern:** capture `started_at` before the try block, then use `try/except`. On success call `write_status` before returning; on failure call `write_status` in the except block then re-raise. All four Lambdas (including `daily_odds_fetch`) re-raise on failure rather than returning a 500 body — the CloudWatch `Errors` alarm and SQS dead-letter queue both key off Lambda's native unhandled-exception accounting, which never fires for a normally-returned response. Import as a sibling module (`from status_writer import write_status`).
 
 ```python
 started_at = datetime.utcnow()
@@ -140,7 +140,7 @@ try:
 except Exception as e:
     completed_at = datetime.utcnow()
     write_status(..., status="failed", games_processed=games_processed, error=str(e))
-    raise  # or return {"statusCode": 500, ...}
+    raise
 ```
 
 **Bundling:** `src/shared/status_writer.py` is copied into each Lambda zip via `cp src/shared/*.py $(BUILD_DIR)/` in the Makefile (added to `zip-mlb-fetch`, `zip-process-data`, `zip-odds-fetch`).
@@ -181,7 +181,7 @@ Runs independently. Triggered manually or via a separate EventBridge rule. Accep
 
 **Odds modules** (in `src/data/modules/`, bundled via `make zip-odds-fetch`):
 - `odds_fetch.py` — API client: `get_games`, `get_team_odds`, `get_player_props`, `get_all_player_props`
-- `odds_quota.py` — SSM quota helpers: `get_monthly_usage`, `check_quota`, `increment_monthly_usage`
+- `odds_quota.py` — SSM quota helpers: `get_monthly_usage`, `check_quota`, `set_monthly_usage` (writes the real usage reported by The Odds API's `x-requests-used` response header — not a locally-incremented guess)
 
 **S3 output:**
 ```
@@ -225,7 +225,9 @@ aws lambda invoke \
 
 ## Model Layer — `src/models/`
 
-The end goal is a shared feature store feeding **multiple models** (batter hit/no-hit, pitcher K/no-K, and others as they're built). `hit_predictor` (`src/models/hit_predictor/`) was the first model and is still where the batter-side hit-probability problem is worked on. `src/models/k_predictor/` (pitcher strikeout probability), `src/models/n_pa_predictor/` (batter plate-appearance count / `low_pa` classifier), `src/models/bb_predictor/` (pitcher walk probability), and `src/models/short_outing_predictor/` (starting-pitcher short-outing probability — the last candidate in README's sub-problem menu) are newer sibling models — see `README.md`'s sub-problem menu and `ROADMAP.md`'s Mid-term section for current status of each. All four compose `hit_predictor`'s existing target-agnostic feature-building machinery (season/rolling stats, role gating) via their own thin `processing/pipeline.py` + `processing/schema.py`, rather than duplicating it. `short_outing_predictor` is the first to run at a different grain than the rest — one row per starting-pitcher-*start*, not per PA or batter-game — reusing `game_context.py`'s `build_expected_start_innings` (a pre-game workload-shrinkage estimate originally built for `n_pa_predictor`'s opposing-starter feature) for the pitcher's own start instead. Each still runs its own bespoke processing pipeline rather than consuming from the Layer 4 Feast store above, because the feature engineering it needs (PA-grain, point-in-time-safe, extensively feature-engineered) is still being worked out model-side before it's worth generalizing into the shared store. Expect this pipeline's proven patterns (rolling windows, point-in-time shifting, role-aware pitcher splits) to migrate toward Layer 4 now that a second model (`k_predictor`) exists and needs the same features — see `ROADMAP.md`'s "Feature-store convergence" item.
+The end goal is a shared feature store feeding **multiple models** (batter hit/no-hit, pitcher K/no-K, and others as they're built). `hit_predictor` (`src/models/hit_predictor/`) was the first model and is still where the batter-side hit-probability problem is worked on. `src/models/k_predictor/` (pitcher strikeout probability), `src/models/n_pa_predictor/` (batter plate-appearance count / `low_pa` classifier), `src/models/bb_predictor/` (pitcher walk probability), `src/models/short_outing_predictor/` (starting-pitcher short-outing probability — the last candidate in README's sub-problem menu), and `src/models/batters_faced_predictor/` (starting-pitcher batters-faced regression) are newer sibling models — see `README.md`'s sub-problem menu and `ROADMAP.md`'s Mid-term section for current status of each. `batters_faced_predictor` isn't itself a README sub-problem-menu candidate (it's not a standalone DK prop) — it's supporting infrastructure whose target, `realized_batters_faced`, is a better-tuned replacement candidate for `game_context.py`'s `build_expected_batters_faced` shrinkage cascade, which `k_predictor`'s total-strikeout prediction already depends on. All five compose `hit_predictor`'s existing target-agnostic feature-building machinery (season/rolling stats, role gating) via their own thin `processing/pipeline.py` + `processing/schema.py`, rather than duplicating it. `short_outing_predictor` and `batters_faced_predictor` are the two that run at a different grain than the rest — one row per starting-pitcher-*start*, not per PA or batter-game — with `short_outing_predictor` reusing `game_context.py`'s `build_expected_start_innings` (a pre-game workload-shrinkage estimate originally built for `n_pa_predictor`'s opposing-starter feature) for the pitcher's own start instead. Each still runs its own bespoke processing pipeline rather than consuming from the Layer 4 Feast store above, because the feature engineering it needs (PA-grain, point-in-time-safe, extensively feature-engineered) is still being worked out model-side before it's worth generalizing into the shared store. Expect this pipeline's proven patterns (rolling windows, point-in-time shifting, role-aware pitcher splits) to migrate toward Layer 4 now that a second model (`k_predictor`) exists and needs the same features — see `ROADMAP.md`'s "Feature-store convergence" item.
+
+**`batters_faced_predictor` status** (see `ROADMAP.md`'s 2026-08-26 entries and `src/models/batters_faced_predictor/{baseline,v1,v2,v3}_results.md` for full numbers): baseline positive (tuned XGBoost beats the cascade, MAE 2.7411 vs. 2.8609 — first model in this repo to beat a frozen shared-infrastructure formula on real evidence), v1 flat-on-new-features/positive-on-tuning (2.7347), v2 `real_improvement` (2.6471 — trailing-3-start PA trend + pitcher's own rest days + a pitches-thrown workload-density signal, targeted at established starters getting pulled early despite a clean box line), v3 flat (2.6479 — a multi-season lookback aimed at cold-start pitchers; the bucket itself looks better than the cascade but the gain was already captured by v2, so this specific fix didn't add anything net-new — genuine small-sample variance, not a missing-data gap). `build_expected_batters_faced` itself is still unmodified — a production switch-over is a separate, not-yet-made decision; v2's model is the current strongest candidate.
 
 **Structure:**
 - `processing/pipeline.py` — assembles the PA-outcome training grain from raw pbp/boxscore/schedule/game_info (`create_pa_outcome`)
@@ -268,13 +270,15 @@ Pages: Slate (today's games), Player (historical distributions), Edge (model rat
 
 Lambdas are provisioned via Terraform in `terraform/`. Shared dependencies (MLB-StatsAPI, requests) are packaged as a Lambda layer (`make build-layer`, `make publish-layer`). Deploy individual Lambdas with `make deploy-*`.
 
-**Terraform resources for `daily_odds_fetch`** (all in `terraform/main.tf`):
+**Terraform resources for `daily_odds_fetch`** (all in `terraform/main.tf`, confirmed applied and live as of 2026-08-26 — `terraform plan` reports no drift):
 - `aws_lambda_function.odds_fetch` — 300s timeout, 512 MB, handler `handler.handler`
 - `aws_iam_role_policy.lambda_ssm_odds` — GetParameter + PutParameter on `/mlb/odds-api/*`
-- `aws_sqs_queue.odds_dlq` + `aws_iam_role_policy.lambda_sqs_dlq` — DLQ for failed invocations (**pending `terraform apply`** — blocked by dk-user IAM permissions)
-- `aws_sns_topic.lambda_alerts` + `aws_sns_topic_subscription.email` → `thealconomist@gmail.com` (**pending `terraform apply`**)
-- `aws_cloudwatch_metric_alarm.odds_errors` — fires on Errors ≥ 1 (**pending `terraform apply`**)
-- `aws_cloudwatch_metric_alarm.odds_zero_invocations` — fires if Invocations < 1 in last 24h, `treat_missing_data = breaching` (**pending `terraform apply`**)
+- `aws_sqs_queue.odds_dlq` + `aws_iam_role_policy.lambda_sqs_dlq` — DLQ for failed invocations
+- `aws_sns_topic.lambda_alerts` + `aws_sns_topic_subscription.email` → `thealconomist@gmail.com` (subscription confirmed)
+- `aws_cloudwatch_metric_alarm.odds_errors` — fires on Errors ≥ 1
+- `aws_cloudwatch_metric_alarm.odds_zero_invocations` — fires if Invocations < 1 in last 24h, `treat_missing_data = breaching`
+
+These alarms and the DLQ key off Lambda's native unhandled-exception accounting (the `AWS/Lambda` `Errors` metric and async-invocation DLQ routing both require an actual raised exception, not a caught-and-returned error body) — see the Known Issues entry below for a bug that silently defeated this for 9+ days.
 
 ---
 
@@ -300,7 +304,7 @@ Integration test approach: moto mocks AWS (S3 + SSM), `unittest.mock.patch` mock
 
 - **Status writer IAM** — Lambda execution roles need `s3:PutObject` on `arn:aws:s3:::mlbdk/lambdas/status/*`; not yet added to Terraform
 - **`daily_feature_create` status writer** — not yet integrated; needs the same try/except pattern as the other three Lambdas; `games_processed` keys TBD once the handler bugs are fixed
-- `daily_odds_fetch` DLQ + CloudWatch alarms are written in Terraform but **not yet applied** — `terraform apply` blocked by dk-user IAM permissions (needs `iam:CreatePolicy`, `iam:AttachRolePolicy`, `sqs:*`, `sns:*`, `cloudwatch:*`)
+- **[fixed 2026-08-26]** `daily_odds_fetch`'s handler used to catch all exceptions and return `{"statusCode": 500, ...}` instead of re-raising, which meant the DLQ and `odds_errors` CloudWatch alarm (both wired to Lambda's native `Errors` metric / unhandled-exception accounting) never fired despite the Lambda failing daily for 9+ days — both alarms sat at `OK` and the DLQ stayed empty the whole time. Handler now re-raises after `write_status`, matching the other three Lambdas' pattern.
 - `daily_feature_create` handler has a bug in `_yesterday()` — `timedelta` parenthesis wrapping is incorrect
 - `daily_feature_create` handler references `datetime.timezone.utc` as `datetime.now(datetime.timezone.utc)` — needs `from datetime import timezone`
 - Feature transform modules (`team_batter_base`, `player_batter_base`, etc.) are not bundled in `daily_feature_create` zip — `make zip-feature-create` does not exist yet

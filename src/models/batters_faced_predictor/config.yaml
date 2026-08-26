@@ -1,0 +1,43 @@
+# Baseline config — batters_faced_predictor (expected batters-faced regression)
+# Run: python baseline/model/run.py (from src/models/batters_faced_predictor/)
+bucket: mlbdk
+region: us-east-2
+target_column: realized_batters_faced
+task_type: regression
+date_column: game_date
+time_based_split: true
+test_season: 2025   # held-out — never evaluated during development; final eval only in a future train.py
+val_season: 2024    # iterate against this during development
+metric: mae          # MAE is the metric the shrinkage cascade's own floor was measured
+                      # in (ROADMAP.md Story-0 capture) — comparability drives this choice,
+                      # not a general MAE-vs-RMSE preference
+secondary_metric: rmse
+model_name: batters_faced_predictor
+
+# Same split as hit_predictor/k_predictor/n_pa_predictor/bb_predictor/
+# short_outing_predictor — this model reuses their feature builders directly
+# and should stay comparable.
+train_seasons:
+  - 2017
+  - 2018
+  - 2019
+  - 2022
+  - 2023
+  - 2024
+  - 2025
+
+# Seasons used to compute last-season rate/PA stats (one season behind each
+# train season)
+feature_seasons:
+  - 2016
+  - 2017
+  - 2018
+  - 2019
+  - 2022
+  - 2023
+  - 2024
+
+drop_columns:
+  - personId
+  - gamepk
+  - game_date

@@ -31,11 +31,11 @@ FAKE_PROPS = {
 }
 
 
-def _api_response(data):
+def _api_response(data, used="44"):
     mock = MagicMock()
     mock.status_code = 200
     mock.json.return_value = data
-    mock.headers = {"x-requests-remaining": "490"}
+    mock.headers = {"x-requests-remaining": "490", "x-requests-used": used}
     return mock
 
 
@@ -118,7 +118,7 @@ class TestHandlerEndToEnd:
         df = wr.s3.read_parquet(f"s3://{BUCKET}/raw_data/odds/player_props/{YEAR}/{DATE}.parquet")
         assert len(df) == len(FAKE_GAMES)
 
-    def test_quota_counter_increments_from_zero(self, aws_infra):
+    def test_quota_counter_reflects_real_usage_from_api(self, aws_infra):
         _, ssm = aws_infra
         with patch("odds_fetch.requests.get", side_effect=_route_request):
             from handler import handler
@@ -127,9 +127,9 @@ class TestHandlerEndToEnd:
         response = ssm.get_parameter(
             Name=f"/mlb/odds-api/requests-used/{YEAR}/{MONTH}"
         )
-        assert response["Parameter"]["Value"] == "1"
+        assert response["Parameter"]["Value"] == "44"
 
-    def test_quota_counter_increments_from_existing_value(self, aws_infra):
+    def test_quota_counter_overwrites_existing_value_with_real_usage(self, aws_infra):
         _, ssm = aws_infra
         ssm.put_parameter(
             Name=f"/mlb/odds-api/requests-used/{YEAR}/{MONTH}",
@@ -143,7 +143,7 @@ class TestHandlerEndToEnd:
         response = ssm.get_parameter(
             Name=f"/mlb/odds-api/requests-used/{YEAR}/{MONTH}"
         )
-        assert response["Parameter"]["Value"] == "42"
+        assert response["Parameter"]["Value"] == "44"
 
     def test_handler_returns_200(self, aws_infra):
         with patch("odds_fetch.requests.get", side_effect=_route_request):
@@ -151,7 +151,7 @@ class TestHandlerEndToEnd:
             result = handler({"date": DATE}, {})
         assert result["statusCode"] == 200
 
-    def test_handler_returns_500_when_quota_exceeded(self, aws_infra):
+    def test_handler_reraises_when_quota_exceeded(self, aws_infra):
         _, ssm = aws_infra
         ssm.put_parameter(
             Name=f"/mlb/odds-api/requests-used/{YEAR}/{MONTH}",
@@ -159,6 +159,5 @@ class TestHandlerEndToEnd:
             Type="String",
         )
         from handler import handler
-        result = handler({"date": DATE}, {})
-        assert result["statusCode"] == 500
-        assert "quota" in result["body"].lower()
+        with pytest.raises(Exception, match="(?i)quota"):
+            handler({"date": DATE}, {})

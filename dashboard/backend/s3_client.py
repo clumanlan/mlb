@@ -42,6 +42,21 @@ def get_latest_s3_parquet(bucket: str, prefix: str) -> pd.DataFrame:
     return pd.read_parquet(io.BytesIO(obj["Body"].read()))
 
 
+def read_s3_parquet_season(bucket: str, prefix: str, columns: list[str] | None = None) -> pd.DataFrame:
+    """Read and concatenate every Parquet file under prefix (one S3 GetObject per file)."""
+    s3 = boto3.client("s3")
+    response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    contents = response.get("Contents", [])
+    if not contents:
+        return pd.DataFrame(columns=columns or [])
+
+    frames = []
+    for obj in contents:
+        body = s3.get_object(Bucket=bucket, Key=obj["Key"])["Body"].read()
+        frames.append(pd.read_parquet(io.BytesIO(body), columns=columns))
+    return pd.concat(frames, ignore_index=True)
+
+
 def get_s3_parquet(bucket: str, key: str) -> pd.DataFrame:
     """Fetch a Parquet file from S3 and return it as a DataFrame."""
     s3 = boto3.client("s3")

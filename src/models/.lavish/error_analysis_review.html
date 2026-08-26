@@ -1,0 +1,217 @@
+<title>batters_faced_predictor error analysis</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1c1c1e; --sub: #6b6b70;
+    --line: #e4e4e2; --accent: #b8542f; --accent-soft: #f4e3da;
+    --under: #b8542f; --over: #2f6f8f; --good: #2f7a4f;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17171a; --panel: #1f1f23; --ink: #ece9e6; --sub: #9a9aa0;
+      --line: #313136; --accent: #e07a4f; --accent-soft: #3a271e;
+      --under: #e07a4f; --over: #6fb3d2; --good: #6fcf97;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17171a; --panel: #1f1f23; --ink: #ece9e6; --sub: #9a9aa0;
+    --line: #313136; --accent: #e07a4f; --accent-soft: #3a271e;
+    --under: #e07a4f; --over: #6fb3d2; --good: #6fcf97;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    line-height: 1.5; padding: 2.5rem 1.5rem 5rem;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--sub); font-size: 0.92rem; margin-bottom: 2rem; }
+  .subtitle code { font-family: var(--mono); background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 4px; }
+  h2 { font-size: 1.05rem; margin: 2.5rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 0.95rem; margin: 1.25rem 0 0.5rem; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.25rem 1.4rem; margin-bottom: 1rem;
+  }
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.9rem; margin: 1rem 0 1.5rem; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; min-width: 0; }
+  .stat .label { font-size: 0.72rem; color: var(--sub); text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat .value { font-size: 1.35rem; font-weight: 600; margin-top: 0.15rem; font-family: var(--mono); }
+  .badge { display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.55rem; border-radius: 999px; }
+  .badge.under { background: var(--accent-soft); color: var(--under); }
+  .badge.over { background: rgba(47,111,143,0.12); color: var(--over); }
+  .badge.good { background: rgba(47,122,79,0.12); color: var(--good); }
+  p.finding { margin: 0.5rem 0; }
+  p.finding b { color: var(--ink); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  th, td { text-align: right; padding: 0.4rem 0.55rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--sub); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+  tr:last-child td { border-bottom: none; }
+  .resid-pos { color: var(--under); font-family: var(--mono); }
+  .resid-neg { color: var(--over); font-family: var(--mono); }
+  .priority { display: flex; gap: 0.9rem; align-items: flex-start; padding: 1rem 0; border-bottom: 1px solid var(--line); }
+  .priority:last-child { border-bottom: none; }
+  .priority .num {
+    flex: 0 0 auto; width: 1.7rem; height: 1.7rem; border-radius: 50%; background: var(--accent);
+    color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem;
+  }
+  .priority .body h4 { margin: 0 0 0.3rem; font-size: 0.95rem; }
+  .priority .body p { margin: 0.25rem 0; font-size: 0.88rem; color: var(--sub); }
+  .priority .body code { font-family: var(--mono); background: var(--accent-soft); color: var(--ink); padding: 0.05rem 0.35rem; border-radius: 4px; font-size: 0.82rem; }
+  .tag { display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.1rem 0.5rem; border-radius: 5px; background: var(--panel); border: 1px solid var(--line); color: var(--sub); margin-right: 0.35rem; }
+  .filelist { font-family: var(--mono); font-size: 0.82rem; }
+  .filelist .add { color: var(--good); }
+  .filelist .fix { color: var(--over); }
+  footer { margin-top: 3rem; color: var(--sub); font-size: 0.78rem; }
+</style>
+
+<div class="wrap">
+  <h1>batters_faced_predictor — residual error analysis</h1>
+  <div class="subtitle">
+    Val season 2024 &middot; tuned XGBoost from <code>v1_opposing_traffic_and_rest</code> &middot;
+    sanity-checked MAE <code>2.7347</code> (matches <code>v1_results.md</code>)
+  </div>
+
+  <div class="stat-row">
+    <div class="stat"><div class="label">Val rows</div><div class="value">4,786</div></div>
+    <div class="stat"><div class="label">Worst bucket MAE</div><div class="value">3.246</div></div>
+    <div class="stat"><div class="label">Best bucket MAE</div><div class="value">2.578</div></div>
+    <div class="stat"><div class="label">Worst single miss</div><div class="value">22.3</div></div>
+  </div>
+
+  <h2>What changed this turn</h2>
+  <div class="card filelist">
+    <div class="add">+ batters_faced_predictor/experiments/residual_error_analysis/run.py</div>
+    <div class="add">+ batters_faced_predictor/experiments/residual_error_analysis/error_analysis.md</div>
+    <div class="add">+ batters_faced_predictor/experiments/residual_error_analysis/plots/*.png</div>
+    <div class="fix">~ fixed KeyError('pitcher_team_id') &mdash; not carried into model_df before the worked-example merge</div>
+  </div>
+
+  <h2>Two systematic failure modes, not just noise</h2>
+
+  <div class="card">
+    <span class="badge under">UNDER-prediction</span>
+    <h3>Cold-start pitchers who turn out to go deep</h3>
+    <p class="finding">
+      The <b>0&ndash;2-starts-this-season bucket is the single worst segment</b> in the whole val set:
+      MAE <b>3.246</b> vs. <b>2.578</b> for pitchers with 11+ starts, with a systematic
+      <b>+0.694 under-prediction bias</b> (n=970). Worked examples: pitchers with
+      <code>starts_n=0</code> and <code>last_season_avg=NaN</code> (no starts last season either &mdash;
+      true blanks) go on to throw 6&ndash;9 efficient innings, 20&ndash;25 batters faced, while the
+      cascade&rsquo;s <code>expected_batters_faced_weight</code> sits near 0 and it falls back to a
+      generic team/league average that undershoots by 9&ndash;14 batters.
+    </p>
+  </div>
+
+  <div class="card">
+    <span class="badge over">OVER-prediction</span>
+    <h3>Established starters pulled early &mdash; but not because they got hit</h3>
+    <p class="finding">
+      The worst 25 over-predictions are almost all <b>established starters</b> (starts_n 10&ndash;32,
+      cascade confidence weight 0.4&ndash;0.86 &mdash; the model was <i>sure</i>) who left after 0&ndash;2 IP.
+      The tell: <code>h</code>/<code>r</code>/<code>er</code> are mostly 0&ndash;2, not a blowup line &mdash;
+      this is the signature of an <b>in-game injury exit, rain delay, or a planned short/piggyback
+      outing</b>, not poor performance the model could see coming from a bad recent line.
+      Nothing in the current feature set carries <i>recent-start trend</i> &mdash; only season-to-date
+      averages, which react slowly.
+    </p>
+  </div>
+
+  <h3>Worst under-predictions (model said low, pitcher actually went deep)</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>pitcher</th><th>realized</th><th>pred</th><th>resid</th><th>starts_n</th><th>xbf_weight</th><th>IP</th><th>BB</th><th>K</th><th>opp</th></tr></thead>
+      <tbody>
+        <tr><td>608331</td><td>25</td><td>11.3</td><td class="resid-pos">+13.7</td><td>1</td><td>0.17</td><td>4.1</td><td>1</td><td>5</td><td>Diamondbacks</td></tr>
+        <tr><td>605156</td><td>28</td><td>16.0</td><td class="resid-pos">+12.0</td><td>0</td><td>0.00</td><td>7.0</td><td>1</td><td>5</td><td>Astros</td></tr>
+        <tr><td>686563</td><td>34</td><td>22.6</td><td class="resid-pos">+11.4</td><td>4</td><td>0.44</td><td>8.2</td><td>1</td><td>4</td><td>Astros</td></tr>
+        <tr><td>672456</td><td>27</td><td>15.7</td><td class="resid-pos">+11.3</td><td>0</td><td>0.00</td><td>6.1</td><td>1</td><td>4</td><td>Twins</td></tr>
+        <tr><td>592332</td><td>34</td><td>23.9</td><td class="resid-pos">+10.1</td><td>20</td><td>0.80</td><td>9.0</td><td>3</td><td>8</td><td>Rangers</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Worst over-predictions (model said high, pitcher left early &mdash; but wasn't hit hard)</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>pitcher</th><th>realized</th><th>pred</th><th>resid</th><th>starts_n</th><th>xbf_weight</th><th>IP</th><th>H</th><th>ER</th><th>opp</th></tr></thead>
+      <tbody>
+        <tr><td>668678</td><td>1</td><td>23.3</td><td class="resid-neg">&minus;22.3</td><td>10</td><td>0.67</td><td>0.0</td><td>1</td><td>0</td><td>Mets</td></tr>
+        <tr><td>656302</td><td>4</td><td>23.4</td><td class="resid-neg">&minus;19.4</td><td>23</td><td>0.82</td><td>1.0</td><td>1</td><td>0</td><td>Pirates</td></tr>
+        <tr><td>572020</td><td>3</td><td>22.0</td><td class="resid-neg">&minus;19.0</td><td>20</td><td>0.80</td><td>0.2</td><td>2</td><td>0</td><td>Astros</td></tr>
+        <tr><td>605452</td><td>4</td><td>22.7</td><td class="resid-neg">&minus;18.7</td><td>8</td><td>0.62</td><td>1.0</td><td>1</td><td>0</td><td>Marlins</td></tr>
+        <tr><td>624133</td><td>6</td><td>24.5</td><td class="resid-neg">&minus;18.5</td><td>11</td><td>0.69</td><td>2.0</td><td>0</td><td>0</td><td>Cardinals</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Candidate features, in priority order</h2>
+  <div class="card">
+    <div class="priority">
+      <div class="num">1</div>
+      <div class="body">
+        <h4>Trailing-3-start PA/start trend <span class="tag">zero new code path</span></h4>
+        <p>
+          Directly targets the over-prediction pattern (recent workload dipping before an
+          established pitcher gets pulled early). <code>game_context.build_pitcher_start_pa_this_season(pbp, window=3)</code>
+          is <b>already generalized</b> to accept a trailing-N-start window &mdash; this pipeline
+          currently only calls it with the default <code>window='season'</code>. Pair the two
+          outputs with <code>interaction_feats.find_rolling_trend_pairs</code> /
+          <code>build_trend_features</code> for a ratio + hot/cold direction signal &mdash; the
+          exact recipe <code>short_outing_predictor</code>'s v1 already validated for a closely
+          related target (trailing-3-start IP trend).
+        </p>
+      </div>
+    </div>
+    <div class="priority">
+      <div class="num">2</div>
+      <div class="body">
+        <h4>Pitcher's own rest days, not team rest days <span class="tag">needs new function</span></h4>
+        <p>
+          <code>pitcher_team_days_since_last_game</code> measures the <i>team's</i> rest (almost
+          always 1 &mdash; teams play daily), not the <i>starter's</i> own days since his last
+          start (normally 4&ndash;5 on a regular rotation). No <code>build_pitcher_rest_days</code>
+          equivalent exists yet in <code>game_context.py</code> &mdash; would need building
+          (real rotation slot / short-rest / extra-rest-after-IL signal), via impl-planning + TDD.
+        </p>
+      </div>
+    </div>
+    <div class="priority">
+      <div class="num">3</div>
+      <div class="body">
+        <h4>Multi-season lookback for the true cold-start rows <span class="tag">needs investigation</span></h4>
+        <p>
+          For rows where <code>pitcher_last_season_start_pa_avg_pa_per_start</code> is
+          <code>NaN</code> (no starts at all last season &mdash; injury or rookie), the cascade
+          falls straight to team/league average. Extending
+          <code>season_stats.build_pitcher_start_pa_stats</code> to fall back to the
+          <i>most recent season with starts</i> (not strictly "last season") could recover real
+          signal for returning-from-injury pitchers specifically &mdash; needs checking whether
+          that materially differs from true rookies before committing to it.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <h2>Bucket MAE (full breakdown in error_analysis.md)</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>starts this season</th><th>MAE</th><th>bias</th><th>n</th></tr></thead>
+      <tbody>
+        <tr><td>0&ndash;2 (new/injured)</td><td><b>3.246</b></td><td class="resid-pos">+0.694</td><td>970</td></tr>
+        <tr><td>6&ndash;10</td><td>2.665</td><td class="resid-pos">+0.263</td><td>950</td></tr>
+        <tr><td>3&ndash;5</td><td>2.616</td><td class="resid-pos">+0.109</td><td>732</td></tr>
+        <tr><td>11+ (established)</td><td>2.578</td><td class="resid-pos">+0.170</td><td>2138</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    Generated from experiments/residual_error_analysis/run.py &middot; full worked-example tables
+    and every bucket cut (weather, month, day-of-week, doubleheader, score margin) in
+    <code>experiments/residual_error_analysis/error_analysis.md</code>
+  </footer>
+</div>

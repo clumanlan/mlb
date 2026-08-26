@@ -5,8 +5,8 @@ import pandas as pd
 from datetime import datetime
 
 
-from odds_quota import check_quota, increment_monthly_usage
-from odds_fetch import get_all_player_props, get_team_odds
+from odds_quota import check_quota, set_monthly_usage
+from odds_fetch import get_all_player_props, get_team_odds, get_last_usage
 from status_writer import write_status
 
 QUOTA_LIMIT = 500
@@ -23,7 +23,7 @@ def get_api_key():
     return response["Parameter"]["Value"]
 
 
-def fetch_and_store(date, api_key, current_count):
+def fetch_and_store(date, api_key):
     year, month = date[:4], date[5:7]
 
     team_odds = get_team_odds(date, api_key=api_key)
@@ -38,8 +38,14 @@ def fetch_and_store(date, api_key, current_count):
         path=f"s3://{S3_BUCKET}/raw_data/odds/player_props/{year}/{date}.parquet",
     )
 
-    increment_monthly_usage(year=year, month=month, current_count=current_count)
-    logger.info(f"Requests used this month: {current_count + 1}/{QUOTA_LIMIT}")
+    real_usage = get_last_usage()
+    if real_usage is not None:
+        set_monthly_usage(year=year, month=month, used_count=real_usage)
+        logger.info(f"Requests used this month: {real_usage}/{QUOTA_LIMIT}")
+    else:
+        logger.warning(
+            "Could not determine real API usage from response headers; quota tracker not updated."
+        )
 
     return {
         "team_odds": len(team_odds),
@@ -57,7 +63,7 @@ def run(date):
         logger.warning(f"quota at {quota['current']}/{QUOTA_LIMIT} — approaching limit.")
 
     api_key = get_api_key()
-    return fetch_and_store(date, api_key, current_count=quota["current"])
+    return fetch_and_store(date, api_key)
 
 
 def handler(event, context):
@@ -90,4 +96,4 @@ def handler(event, context):
             games_processed=games_processed,
             error=str(e),
         )
-        return {"statusCode": 500, "body": str(e)}
+        raise

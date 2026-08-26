@@ -319,6 +319,64 @@ def build_pitcher_start_pa_this_season(
     return _prefix_stat_cols(rolled, prefix=prefix, key_cols=key_cols)
 
 
+def build_pitcher_rest_days(pbp: pd.DataFrame) -> pd.DataFrame:
+    """One row per (personId, gamepk) SP start: calendar days since that
+    pitcher's own previous SP start (any team, following him through a
+    trade), NaN for his first SP start in the data. Same shape as
+    build_team_rest_days (sort by game_datetime, .diff() per entity) but
+    keyed on the pitcher instead of the team, and scoped to
+    pitcher_role == 'sp' — a relief appearance in between two starts is not
+    "his last start."
+    """
+    sp_pbp = pbp[pbp['pitcher_role'] == 'sp']
+    per_start = (
+        sp_pbp
+        .groupby(['pitcher_id', 'gamepk', 'game_date', 'game_datetime', 'game_season'])
+        .size()
+        .reset_index(name='_n')
+        .drop(columns='_n')
+        .rename(columns={'pitcher_id': 'personId'})
+    )
+
+    per_start = per_start.sort_values(['personId', 'game_datetime']).reset_index(drop=True)
+    per_start['pitcher_days_since_last_start'] = (
+        per_start.groupby('personId')['game_date'].diff().dt.days
+    )
+
+    return per_start[['personId', 'gamepk', 'game_date', 'game_datetime', 'game_season', 'pitcher_days_since_last_start']]
+
+
+def build_pitcher_workload_density(
+    pitcher_boxscore: pd.DataFrame, pbp: pd.DataFrame, rest_days: pd.DataFrame
+) -> pd.DataFrame:
+    """One row per (personId, gamepk) SP start: pitcher_last_start_pitches
+    (that pitcher's own previous SP start's pitch count, shift(1) — NaN for
+    his first SP start) and pitcher_workload_density = pitches / rest days
+    since that start (from build_pitcher_rest_days's output, passed in —
+    composition, not recomputed here), NaN-guarded (not inf) when rest days
+    is 0 or NaN.
+
+    Pitches thrown, not batters faced: pitch count is the actual lever
+    managers pull on for a pull decision, and batters-faced recency is
+    already covered by the separate trailing-3-start PA trend feature.
+    """
+    role_lookup = pbp[pbp['pitcher_role'] == 'sp'][['pitcher_id', 'gamepk']].drop_duplicates().rename(
+        columns={'pitcher_id': 'personId'}
+    )
+    sp_box = pitcher_boxscore.merge(role_lookup, on=['personId', 'gamepk'], how='inner')
+    sp_box = sp_box.sort_values(['personId', 'game_datetime']).reset_index(drop=True)
+    sp_box['pitcher_last_start_pitches'] = sp_box.groupby('personId')['p'].shift(1)
+
+    result = sp_box[['personId', 'gamepk', 'pitcher_last_start_pitches']].merge(
+        rest_days[['personId', 'gamepk', 'pitcher_days_since_last_start']], on=['personId', 'gamepk'], how='left',
+    )
+    result['pitcher_workload_density'] = (
+        result['pitcher_last_start_pitches'] / result['pitcher_days_since_last_start'].replace(0, np.nan)
+    )
+
+    return result
+
+
 def build_expected_batters_faced(
     pitcher_start_pa_last_season: pd.DataFrame,
     pitcher_start_pa_this_season: pd.DataFrame,
@@ -390,3 +448,137 @@ def build_pitcher_role_by_inning(team_game: pd.DataFrame, max_innings: int = 9) 
     expanded['pitcher_role'] = np.where(expanded['inning'] <= expanded['sp_innings'], 'sp', 'bullpen')
 
     return expanded.drop(columns=['sp_innings'])
+
+
+# --------------------------- BATTER SLOT EXPANSION (count-distribution check) --------------------------- #
+# Same expansion shape as build_pitcher_role_by_inning above (cross join a pregame
+# estimate against a fixed range, then tag/filter), but on the batter-lineup axis
+# instead of innings — feeds k_predictor's total-strikeout count-distribution check.
+
+def build_batter_slot_expansion(
+    pitcher_starts: pd.DataFrame, batting_order: pd.DataFrame, max_slots: int = 45
+) -> pd.DataFrame:
+    """Expand one row per pitcher start (carrying expected_batters_faced) into
+    one row per synthetic batter-slot 1..round(expected_batters_faced), cycling
+    through the real 9-batter lineup order (slot 10 = lineup position 1 again,
+    2nd time through). Each slot carries the specific real batter_id in that
+    position (from batting_order — a realized historical lineup standing in
+    for real pregame lineup data, which this pipeline doesn't ingest yet) and
+    expected_times_through_order, capped at 3 — the same cap
+    _add_pbp_times_through_order and expected_role.py already use everywhere
+    else this concept appears, so the trained PA classifier sees the same
+    feature shape it was trained on rather than an unseen value like 4 or 5.
+
+    batting_order is deduplicated to one row per (gamepk, batting_order)
+    before joining — real MLB data isn't always a clean 1:1 slot mapping (a
+    substitution is sometimes logged sharing the SAME slot number as the
+    starter it replaced, confirmed against real 2024 data: roughly half of
+    all (gamepk, batting_order) pairs had 2 batter rows). Without this, the
+    join below is on the slot NUMBER, not a real key — a collision fans out
+    every downstream slot silently rather than erroring."""
+
+    batting_order = batting_order.drop_duplicates(subset=['gamepk', 'batting_order'], keep='first')
+
+    df = pitcher_starts.copy()
+    df['n_slots'] = df['expected_batters_faced'].round().clip(lower=0, upper=max_slots)
+
+    slots = pd.DataFrame({'slot': range(1, max_slots + 1)})
+    expanded = df.merge(slots, how='cross')
+    expanded = expanded[expanded['slot'] <= expanded['n_slots']].copy()
+
+    expanded['lineup_position'] = ((expanded['slot'] - 1) % 9) + 1
+    cycle = ((expanded['slot'] - 1) // 9) + 1
+    expanded['expected_times_through_order'] = cycle.clip(upper=3)
+
+    expanded = expanded.merge(
+        batting_order.rename(columns={'batting_order': 'lineup_position'}),
+        on=['gamepk', 'lineup_position'], how='left',
+    )
+
+    return expanded.drop(columns=['n_slots'])
+
+
+# --------------------------- BATTERS-FACED RESIDUAL DISTRIBUTION --------------------------- #
+# build_expected_batters_faced above is a fixed POINT estimate. k_predictor's
+# count-distribution-check diagnostic showed the estimate's error scales with
+# expected_batters_faced_weight (thin this-season sample = bigger miss) — these two
+# functions turn that point estimate plus its known error-correlate into a real
+# distribution: fit an empirical residual histogram per weight bin from historical
+# starts (build_batters_faced_residual_bins), then shift/scatter that bin's
+# histogram around a new start's own point estimate (build_batters_faced_distribution).
+# Chosen over a parametric count distribution (no precedent in this codebase, and
+# batters-faced is plausibly bimodal — most starts end near a normal pull point, a
+# minority end early from injury/blowout/quick-hook) or full simulation (would need
+# manager pull-decision and pitch-count/score-trajectory features this pipeline
+# doesn't have). See ROADMAP.md's batters-faced-distribution plan.
+
+def build_batters_faced_residual_bins(fit_starts: pd.DataFrame, n_bins: int = 4) -> pd.DataFrame:
+    """Fit an empirical residual histogram per expected_batters_faced_weight
+    bin from historical starts (realized_batters_faced known). Bin edges are
+    extended to -inf/+inf at the outer boundaries so any future weight value
+    (0..1 by construction, but not asserted here) always resolves to exactly
+    one bin — same 'always resolves, never leaves a gap' contract
+    build_expected_batters_faced's own fallback cascade guarantees.
+
+    Returns long-format: weight_bin, weight_bin_lower, weight_bin_upper,
+    residual (realized - round(expected), int), probability (sums to 1.0
+    within each bin).
+
+    Rows missing expected_batters_faced (build_expected_batters_faced's
+    3-level cascade still returns NaN for a true first-ever start with no
+    league fallback for that season yet — rare, but present in real data)
+    are dropped before computing residuals: a NaN residual can't be
+    assigned to any bin.
+    """
+    df = fit_starts.dropna(subset=['expected_batters_faced', 'realized_batters_faced']).copy()
+    df['residual'] = (df['realized_batters_faced'] - df['expected_batters_faced'].round()).astype(int)
+
+    bin_labels, edges = pd.qcut(
+        df['expected_batters_faced_weight'], n_bins, labels=False, duplicates='drop', retbins=True
+    )
+    df['weight_bin'] = bin_labels
+    edges = edges.copy()
+    edges[0], edges[-1] = -np.inf, np.inf
+
+    counts = df.groupby(['weight_bin', 'residual']).size().rename('n').reset_index()
+    counts['probability'] = counts['n'] / counts.groupby('weight_bin')['n'].transform('sum')
+
+    bin_edges = pd.DataFrame({
+        'weight_bin': range(len(edges) - 1),
+        'weight_bin_lower': edges[:-1],
+        'weight_bin_upper': edges[1:],
+    })
+
+    return counts.merge(bin_edges, on='weight_bin')[
+        ['weight_bin', 'weight_bin_lower', 'weight_bin_upper', 'residual', 'probability']
+    ]
+
+
+def build_batters_faced_distribution(
+    expected_pa: pd.DataFrame, residual_bins: pd.DataFrame, max_slots: int = 45
+) -> pd.DataFrame:
+    """Apply build_batters_faced_residual_bins' fitted histograms to new
+    starts: resolve each start's own weight_bin, shift that bin's residual
+    pmf by the start's rounded expected_batters_faced, clip to [0, max_slots]
+    (accumulating mass at the boundary, not overwriting it — a start can
+    have multiple residuals collapse to the same clipped n), and scatter
+    into a fixed-length pmf. Always returns a length-(max_slots+1) array
+    per row, matching poisson_binomial_mixture_pmf's own fixed-length
+    contract (the combinator this distribution feeds).
+    """
+    bins = residual_bins[['weight_bin', 'weight_bin_lower', 'weight_bin_upper']].drop_duplicates()
+
+    def _pmf_for_row(weight, base):
+        bin_row = bins[(bins['weight_bin_lower'] <= weight) & (weight < bins['weight_bin_upper'])].iloc[0]
+        own = residual_bins[residual_bins['weight_bin'] == bin_row['weight_bin']]
+        n_vals = (base + own['residual']).clip(0, max_slots)
+        pmf = np.zeros(max_slots + 1)
+        np.add.at(pmf, n_vals.to_numpy(), own['probability'].to_numpy())
+        return pmf
+
+    df = expected_pa.copy()
+    df['batters_faced_pmf'] = [
+        _pmf_for_row(w, round(e))
+        for w, e in zip(df['expected_batters_faced_weight'], df['expected_batters_faced'])
+    ]
+    return df

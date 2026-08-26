@@ -161,3 +161,53 @@ class TestGetS3Parquet:
         with patch("s3_client.boto3.client", return_value=mock_s3):
             with pytest.raises(FileNotFoundError):
                 s3_client.get_s3_parquet("mlbdk", "missing.parquet")
+
+
+class TestReadS3ParquetSeason:
+    def _parquet_bytes(self, df):
+        buf = io.BytesIO()
+        df.to_parquet(buf, index=False)
+        buf.seek(0)
+        return buf.read()
+
+    def test_concatenates_all_files_under_prefix(self):
+        df1 = pd.DataFrame({"gamepk": [1, 2]})
+        df2 = pd.DataFrame({"gamepk": [3]})
+        mock_s3 = MagicMock()
+        mock_s3.list_objects_v2.return_value = {
+            "Contents": [
+                {"Key": "prefix/2026-04-01.parquet", "LastModified": datetime(2026, 4, 1, tzinfo=timezone.utc)},
+                {"Key": "prefix/2026-04-02.parquet", "LastModified": datetime(2026, 4, 2, tzinfo=timezone.utc)},
+            ]
+        }
+        mock_s3.get_object.side_effect = [
+            {"Body": io.BytesIO(self._parquet_bytes(df1))},
+            {"Body": io.BytesIO(self._parquet_bytes(df2))},
+        ]
+
+        with patch("s3_client.boto3.client", return_value=mock_s3):
+            result = s3_client.read_s3_parquet_season("mlbdk", "prefix/")
+
+        assert sorted(result["gamepk"].tolist()) == [1, 2, 3]
+
+    def test_returns_empty_dataframe_when_prefix_has_no_objects(self):
+        mock_s3 = MagicMock()
+        mock_s3.list_objects_v2.return_value = {}
+
+        with patch("s3_client.boto3.client", return_value=mock_s3):
+            result = s3_client.read_s3_parquet_season("mlbdk", "prefix/")
+
+        assert result.empty
+
+    def test_columns_param_restricts_returned_columns(self):
+        df = pd.DataFrame({"gamepk": [1], "extra_col": ["x"]})
+        mock_s3 = MagicMock()
+        mock_s3.list_objects_v2.return_value = {
+            "Contents": [{"Key": "prefix/2026-04-01.parquet", "LastModified": datetime(2026, 4, 1, tzinfo=timezone.utc)}]
+        }
+        mock_s3.get_object.return_value = {"Body": io.BytesIO(self._parquet_bytes(df))}
+
+        with patch("s3_client.boto3.client", return_value=mock_s3):
+            result = s3_client.read_s3_parquet_season("mlbdk", "prefix/", columns=["gamepk"])
+
+        assert list(result.columns) == ["gamepk"]

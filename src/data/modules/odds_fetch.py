@@ -8,13 +8,23 @@ BASE_URL = "https://api.the-odds-api.com/v4"
 BOOKMAKERS = "draftkings"
 PROP_MARKETS = "pitcher_strikeouts,batter_hits,batter_home_runs,pitcher_hits_allowed"
 
+_last_requests_used = None
+
+
+def get_last_usage():
+    return _last_requests_used
+
 
 def api_get(url, params, api_key, retries=3, delay=2):
+    global _last_requests_used
     params = {**params, "apiKey": api_key}
     for attempt in range(retries):
         response = requests.get(url, params=params)
         if response.status_code == 200:
             logger.info(f"Requests remaining: {response.headers.get('x-requests-remaining')}")
+            used = response.headers.get("x-requests-used")
+            if used is not None:
+                _last_requests_used = int(used)
             return response.json()
         elif response.status_code == 429:
             wait = delay * (attempt + 1)
