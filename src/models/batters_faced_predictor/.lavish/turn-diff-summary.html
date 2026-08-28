@@ -1,0 +1,151 @@
+<title>batters_faced_predictor — turn diff summary</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1c1c1e; --sub: #6b6b70;
+    --line: #e4e4e2; --accent: #b8542f; --accent-soft: #f4e3da;
+    --good: #2f7a4f; --warn: #a6791f; --info: #2f6f8f;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17171a; --panel: #1f1f23; --ink: #ece9e6; --sub: #9a9aa0;
+      --line: #313136; --accent: #e07a4f; --accent-soft: #3a271e;
+      --good: #6fcf97; --warn: #e0b95e; --info: #6fb3d2;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17171a; --panel: #1f1f23; --ink: #ece9e6; --sub: #9a9aa0;
+    --line: #313136; --accent: #e07a4f; --accent-soft: #3a271e;
+    --good: #6fcf97; --warn: #e0b95e; --info: #6fb3d2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    line-height: 1.5; padding: 2.5rem 1.5rem 5rem; overflow-wrap: anywhere;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--sub); font-size: 0.92rem; margin-bottom: 2rem; }
+  .subtitle code { font-family: var(--mono); background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 4px; }
+  h2 { font-size: 1.05rem; margin: 2.5rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--line); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1.25rem 1.4rem; margin-bottom: 1rem; min-width: 0; }
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.9rem; margin: 1rem 0 1.5rem; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; min-width: 0; }
+  .stat .label { font-size: 0.72rem; color: var(--sub); text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat .value { font-size: 1.35rem; font-weight: 600; margin-top: 0.15rem; font-family: var(--mono); }
+  .filelist { font-family: var(--mono); font-size: 0.82rem; }
+  .filelist .row { display: flex; justify-content: space-between; gap: 1rem; padding: 0.3rem 0; border-bottom: 1px solid var(--line); }
+  .filelist .row:last-child { border-bottom: none; }
+  .filelist .add { color: var(--good); }
+  .filelist .path { min-width: 0; overflow-wrap: anywhere; }
+  .filelist .n { color: var(--sub); flex: 0 0 auto; }
+  p.finding { margin: 0.5rem 0; font-size: 0.92rem; }
+  p.finding b { color: var(--ink); }
+  .timeline { display: flex; flex-direction: column; gap: 0; }
+  .step { display: flex; gap: 0.9rem; align-items: flex-start; padding: 0.9rem 0; border-bottom: 1px solid var(--line); }
+  .step:last-child { border-bottom: none; }
+  .step .num { flex: 0 0 auto; width: 1.6rem; height: 1.6rem; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.8rem; }
+  .step .body h4 { margin: 0 0 0.25rem; font-size: 0.92rem; }
+  .step .body p { margin: 0.2rem 0; font-size: 0.85rem; color: var(--sub); }
+  .badge { display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.1rem 0.5rem; border-radius: 999px; margin-left: 0.4rem; }
+  .badge.good { background: rgba(47,122,79,0.12); color: var(--good); }
+  .badge.warn { background: rgba(166,121,31,0.12); color: var(--warn); }
+  .badge.info { background: rgba(47,111,143,0.12); color: var(--info); }
+  code { font-family: var(--mono); background: var(--accent-soft); padding: 0.05rem 0.35rem; border-radius: 4px; font-size: 0.85em; }
+  footer { margin-top: 3rem; color: var(--sub); font-size: 0.78rem; }
+</style>
+
+<div class="wrap">
+  <h1>batters_faced_predictor — this turn's diff</h1>
+  <div class="subtitle">
+    Follow-up investigation on v2's residuals (val season 2024) &mdash; diagnostic scripts only,
+    no production code or model changes. Scoped to this conversation's own changes; unrelated
+    concurrent edits under <code>dashboard/</code> are a separate session's work, not included here.
+  </div>
+
+  <div class="stat-row">
+    <div class="stat"><div class="label">Files added</div><div class="value">5</div></div>
+    <div class="stat"><div class="label">Lines added</div><div class="value">~1,516</div></div>
+    <div class="stat"><div class="label">Plots added</div><div class="value">2</div></div>
+    <div class="stat"><div class="label">Production code changed</div><div class="value">0</div></div>
+  </div>
+
+  <h2>Files added</h2>
+  <div class="card filelist">
+    <div class="row"><span class="add path">+ experiments/residual_error_analysis_v2/run.py</span><span class="n">468 lines</span></div>
+    <div class="row"><span class="add path">+ experiments/residual_error_analysis_v2/error_analysis_v2.md</span><span class="n">204 lines</span></div>
+    <div class="row"><span class="add path">+ experiments/residual_error_analysis_v2/game_log_check.py</span><span class="n">224 lines</span></div>
+    <div class="row"><span class="add path">+ experiments/residual_error_analysis_v2/game_log_check.md</span><span class="n">331 lines</span></div>
+    <div class="row"><span class="add path">+ ../../.lavish/residual_error_analysis_v2.html</span><span class="n">289 lines</span></div>
+    <div class="row"><span class="add path">+ experiments/residual_error_analysis_v2/plots/*.png</span><span class="n">2 files</span></div>
+  </div>
+
+  <h2>What this turn actually established</h2>
+  <div class="timeline">
+    <div class="step">
+      <div class="num">1</div>
+      <div class="body">
+        <h4>Re-ran the residual diagnostic against v2's model, not v1's <span class="badge info">gap closed</span></h4>
+        <p>The only prior residual analysis (<code>experiments/residual_error_analysis/</code>) predates v2/v3 and was
+        never re-run against the current strongest model. Sanity-checked MAE 2.6471 matches <code>v2_results.md</code>
+        exactly. Bucket cuts (weather, month, day-of-week, doubleheader, venue, score margin, opposing-lineup
+        strength, rest days, workload density, trend direction) all came back flat &mdash; no hidden lever there.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">2</div>
+      <div class="body">
+        <h4>Worked examples surfaced a persistent failure mode <span class="badge warn">still open</span></h4>
+        <p>Established, high-confidence starters (cascade weight 0.7&ndash;0.86) pulled after 0&ndash;2 clean innings,
+        23/25 with no decision recorded &mdash; the same over-prediction mode v2 targeted but didn't close
+        (established-bucket MAE only moved 2.6053&rarr;2.5154). Three names (Su&aacute;rez, Montas, Rodriguez)
+        appeared in <i>both</i> the worst-over and worst-under lists.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">3</div>
+      <div class="body">
+        <h4>Volatility hypothesis confirmed real, then self-corrected under scrutiny <span class="badge good">honest correction</span></h4>
+        <p>Full 2024 game logs for the flagged pitchers vs. a random 15-pitcher control group confirmed elevated
+        CV (0.238 vs. 0.139, 9/10 flagged pitchers above every control pitcher). But a follow-up breakdown (prompted
+        by direct pushback) showed CV is driven by just 1&ndash;3 anomalous starts per pitcher (42&ndash;96% of variance)
+        across <i>all ten</i> flagged pitchers &mdash; not chronic game-to-game unpredictability as first framed. A
+        trailing-3&ndash;5-start rolling std-dev (the original v4 candidate) can't see these coming; the original
+        proposal didn't survive its own evidence.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="num">4</div>
+      <div class="body">
+        <h4>Rest-days hypothesis tested directly and ruled out <span class="badge good">falsified cleanly</span></h4>
+        <p>User's hypothesis (insufficient rest before the short outing) checked against
+        <code>pitcher_days_since_last_start</code> for the 9 clearest events: 6, 6, 5, 6, 7, 6, 8, 5, 6 days &mdash;
+        normal-to-extra rest, nothing short. Weather also ruled out (no rain/delays). Day-of-week/month showed only a
+        thin, inconclusive skew (n=19, too small to act on).</p>
+      </div>
+    </div>
+  </div>
+
+  <h2>Open decision</h2>
+  <div class="card">
+    <p class="finding">
+      No pre-game-knowable shared trigger survived across rest days, weather, day-of-week, opponent, or
+      workload density. The remaining plausible mechanisms (in-game score state at the moment of the pull,
+      external injury/roster-management news) are either not pre-game-knowable or not present in this
+      pipeline's data. <b>Leaning candidate:</b> a season-to-date count of a pitcher's own anomalously-short
+      starts &mdash; a base-rate/recency signal rather than a rolling-volatility one &mdash; not yet built,
+      pending direction on whether to scope it as a v4 experiment or investigate the in-game score-state
+      angle first (which, even if it explains the mechanism, can't become a usable feature since it isn't
+      knowable pre-game).
+    </p>
+  </div>
+
+  <footer>
+    All diagnostic-only, per repo convention (<code>residual_error_analysis</code>,
+    <code>xgb_vs_cascade_diagnostic</code>, <code>count_distribution_check</code> precedent) &mdash; no
+    production feature code or model changes this turn, so no TDD gate applies yet. Full detail in
+    <code>error_analysis_v2.md</code> and <code>game_log_check.md</code>; live volatility breakdown in
+    <code>../../.lavish/residual_error_analysis_v2.html</code>.
+  </footer>
+</div>
