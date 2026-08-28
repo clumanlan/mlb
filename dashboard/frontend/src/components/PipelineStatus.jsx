@@ -18,6 +18,17 @@ import { useState, useEffect } from 'react'
 //   "run this once, when the component first appears on the page."
 //   Without it, the effect would run on every render — infinite fetch loop.
 
+// Backend timestamps (completed_at) are naive UTC — no "Z" suffix — because
+// they come straight from Python's datetime.utcnow().isoformat(). Appending
+// "Z" tells the browser's Date parser to treat it as UTC instead of guessing
+// local time, then toLocaleTimeString() converts it to whatever timezone the
+// viewer's own machine is set to.
+function formatCompletedAt(isoString) {
+  if (!isoString) return null
+  const withZone = isoString.endsWith('Z') ? isoString : `${isoString}Z`
+  return new Date(withZone).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
 // --- Sub-component: a single pipeline card ---
 // Props are how parent components pass data down to children.
 // Think of them like function arguments. Destructured here: { card }.
@@ -35,9 +46,15 @@ function PipelineCard({ card }) {
         </span>
       </div>
 
-      {/* Run metadata: date · duration */}
+      {/* Run metadata: date · completed-at time · duration */}
       <div className="card-meta">
         <span className="mono">{card.run_date ?? '—'}</span>
+        {card.completed_at && (
+          <>
+            {' · '}
+            <span className="mono">{formatCompletedAt(card.completed_at)}</span>
+          </>
+        )}
         {card.duration_seconds != null && (
           <>
             {' · '}

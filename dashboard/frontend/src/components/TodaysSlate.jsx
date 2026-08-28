@@ -7,6 +7,26 @@
 // is slow, the slate still loads. If the slate API fails, the pipeline cards
 // still render. Independent components = independent failure modes.
 import { useState, useEffect } from 'react'
+import { getGameColor } from '../lib/gameColor.js'
+
+// Scrolls to and briefly pulses this game's two rows in the Starting Pitcher
+// Predictions table (Section 4). Plain DOM manipulation rather than React state —
+// the two sections are independent, sibling components with no shared store, and
+// this is a one-off visual nudge, not app state worth wiring a store for.
+function scrollToPredictions(gamePk) {
+  const el = document.getElementById(`predictions-game-${gamePk}`)
+  if (!el) return // that game has no predictions rendered (not in today's sample set, or still loading)
+
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+
+  // Remove-then-reflow-then-add restarts the CSS animation even on a second click
+  // of the same game — without the reflow, re-adding an already-present class is a
+  // no-op and the pulse wouldn't replay.
+  el.classList.remove('row-highlight')
+  void el.offsetWidth
+  el.classList.add('row-highlight')
+  setTimeout(() => el.classList.remove('row-highlight'), 1500)
+}
 
 // === LineupBadge sub-component ===
 // Props: status = "PENDING" | "CONFIRMED" | "SKIPPED"
@@ -34,6 +54,25 @@ function LineupBadge({ status }) {
   )
 }
 
+// Formats an American odds price with an explicit sign, e.g. 141 -> "+141", -171 -> "-171".
+function formatPrice(price) {
+  return price > 0 ? `+${price}` : `${price}`
+}
+
+// Team names come back full ("Washington Nationals") — the mascot alone
+// ("Nationals") keeps the Odds column narrow.
+function teamMascot(teamName) {
+  return teamName.split(' ').pop()
+}
+
+function formatRunLine(runLine) {
+  return `${teamMascot(runLine.team)} ${runLine.point} (${formatPrice(runLine.price)})`
+}
+
+function formatTotal(total) {
+  return `O/U ${total.point} (${formatPrice(total.over_price)}/${formatPrice(total.under_price)})`
+}
+
 // === GameRow sub-component ===
 // Props: game = one item from the API response's games array.
 //
@@ -41,23 +80,46 @@ function LineupBadge({ status }) {
 // from the table makes it easy to later add onClick, tooltips, or row styling.
 function GameRow({ game }) {
   return (
-    <tr>
+    <tr
+      className="row-clickable"
+      onClick={() => scrollToPredictions(game.game_pk)}
+      title="Jump to this game's starting pitcher predictions"
+    >
       {/* Time in Central — monospace so digits align vertically */}
       <td className="col-time mono">{game.game_time_ct}</td>
 
-      {/* Matchup: "Away Team @ Home Team" */}
-      <td className="col-matchup">{game.away_team} @ {game.home_team}</td>
+      {/* Matchup: "Away Team @ Home Team". The dot's color is shared with this
+          game's rows in Starting Pitcher Predictions — see lib/gameColor.js. */}
+      <td className="col-matchup">
+        <span className="game-dot" style={{ background: getGameColor(game.game_pk) }} />
+        {game.away_team} @ {game.home_team}
+      </td>
 
       {/* Lineup badge — color signals confidence in the lineup */}
       <td className="col-lineup">
         <LineupBadge status={game.lineup_status} />
       </td>
 
-      {/* Odds: ✓ if odds data exists for this game, — if not.
-          Missing odds on late games is normal — the odds API sometimes
-          posts lines within a few hours of game time. */}
-      <td className="col-odds">
-        {game.has_odds ? '✓' : <span className="muted">—</span>}
+      {/* Odds: DraftKings run line (favorite side) + total, or — if DK hasn't
+          posted lines yet. Missing odds on late games is normal — the odds API
+          sometimes posts lines within a few hours of game time. */}
+      <td className="col-odds mono">
+        {game.odds ? (
+          <>
+            {game.odds.run_line && (
+              <div className="odds-line">
+                {formatRunLine(game.odds.run_line)}
+              </div>
+            )}
+            {game.odds.total && (
+              <div className="odds-line muted">
+                {formatTotal(game.odds.total)}
+              </div>
+            )}
+          </>
+        ) : (
+          <span className="muted">—</span>
+        )}
       </td>
 
       {/* Prediction: always — for now. Stage 2 will fill this in. */}

@@ -50,6 +50,36 @@ ODDS_DF = pd.DataFrame([
     }
 ])
 
+ODDS_DF_WITH_MARKETS = pd.DataFrame([
+    {
+        "home_team": "Toronto Blue Jays",
+        "away_team": "Los Angeles Angels",
+        "commence_time": "2026-05-09T19:08:00Z",
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "title": "DraftKings",
+                "markets": [
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {"name": "Los Angeles Angels", "point": 1.5, "price": 120},
+                            {"name": "Toronto Blue Jays", "point": -1.5, "price": -142},
+                        ],
+                    },
+                    {
+                        "key": "totals",
+                        "outcomes": [
+                            {"name": "Over", "point": 8.5, "price": -110},
+                            {"name": "Under", "point": 8.5, "price": -110},
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+])
+
 
 def _schedule_side_effect(bucket, prefix):
     if "schedule" in prefix:
@@ -113,7 +143,7 @@ class TestTodaysSlateRoute:
 
         for game in body["games"]:
             for field in ("game_pk", "away_team", "home_team", "game_time_utc",
-                          "game_time_ct", "venue", "lineup_status", "has_odds", "prediction"):
+                          "game_time_ct", "venue", "lineup_status", "has_odds", "odds", "prediction"):
                 assert field in game, f"missing field: {field}"
 
     def test_games_sorted_ascending_by_time(self):
@@ -161,6 +191,33 @@ class TestTodaysSlateRoute:
             body = client.get("/api/today-slate").json()
 
         assert all(not g["has_odds"] for g in body["games"])
+
+    def test_odds_field_populated_with_run_line_and_total_when_dk_markets_present(self):
+        with patch("main.s3_client.get_latest_s3_json", side_effect=_schedule_side_effect), \
+             patch("main.s3_client.get_s3_parquet", return_value=ODDS_DF_WITH_MARKETS):
+            body = client.get("/api/today-slate").json()
+
+        games = {g["game_pk"]: g for g in body["games"]}
+        assert games[745123]["odds"] == {
+            "run_line": {"team": "Toronto Blue Jays", "point": -1.5, "price": -142},
+            "total": {"point": 8.5, "over_price": -110, "under_price": -110},
+        }
+        assert games[745124]["odds"] is None
+
+    def test_odds_field_none_when_odds_row_has_no_markets(self):
+        with patch("main.s3_client.get_latest_s3_json", side_effect=_schedule_side_effect), \
+             patch("main.s3_client.get_s3_parquet", return_value=ODDS_DF):
+            body = client.get("/api/today-slate").json()
+
+        games = {g["game_pk"]: g for g in body["games"]}
+        assert games[745123]["odds"] is None
+
+    def test_odds_field_none_when_odds_file_missing(self):
+        with patch("main.s3_client.get_latest_s3_json", side_effect=_schedule_side_effect), \
+             patch("main.s3_client.get_s3_parquet", side_effect=FileNotFoundError("no odds")):
+            body = client.get("/api/today-slate").json()
+
+        assert all(g["odds"] is None for g in body["games"])
 
     def test_prediction_is_always_none(self):
         with patch("main.s3_client.get_latest_s3_json", side_effect=_schedule_side_effect), \

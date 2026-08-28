@@ -39,7 +39,8 @@
 
   /* Fonts */
   --font-body: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-mono: 'Space Mono', 'JetBrains Mono', 'Fira Code', monospace;
+  --font-marker: 'Permanent Marker', cursive;
 
   /* Spacing rhythm */
   --space-1: 4px;
@@ -89,9 +90,10 @@ body {
 }
 
 .app-header h1 {
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-family: var(--font-marker);
+  font-size: 26px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
 }
 
 .app-date {
@@ -319,15 +321,61 @@ body {
   font-weight: 500;
 }
 
-.slate-table .col-odds,
 .slate-table .col-prediction {
   text-align: center;
   width: 60px;
   color: var(--color-text-muted);
 }
 
+.slate-table .col-odds {
+  text-align: left;
+  width: 150px;
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+
+.slate-table .col-odds .odds-line {
+  white-space: nowrap;
+}
+
 .slate-table .col-lineup {
   width: 110px;
+}
+
+/* ============================================================
+   GAME <-> PITCHER VISUAL LINK
+   A small colored dot (see lib/gameColor.js) pairs a game's Slate row with its
+   two rows in Starting Pitcher Predictions; clicking a Slate row scrolls to and
+   briefly pulses the matching prediction rows.
+   ============================================================ */
+.game-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-right: var(--space-2);
+  flex: none;
+}
+
+.slate-table tbody tr.row-clickable {
+  cursor: pointer;
+}
+
+.predictions-game-group.row-highlight td {
+  background: var(--color-surface-subtle);
+  transition: background 150ms ease;
+  animation: highlight-pulse 1.4s ease-out;
+}
+
+@keyframes highlight-pulse {
+  0%   { background: var(--color-ok-bg); }
+  100% { background: var(--color-surface-subtle); }
+}
+
+.section-caption {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--color-text-muted);
 }
 
 /* ============================================================

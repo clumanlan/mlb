@@ -8,6 +8,7 @@
 import PipelineStatus from './components/PipelineStatus.jsx'
 import SeasonCompleteness from './components/SeasonCompleteness.jsx'
 import TodaysSlate from './components/TodaysSlate.jsx'
+import StartingPitcherPredictions from './components/StartingPitcherPredictions.jsx'
 
 // Format today's date as "Saturday, May 9, 2026" for the header.
 // toLocaleDateString() is a built-in JS method — no library needed.
@@ -22,7 +23,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>MLB pre-game dashboard</h1>
+        <h1>MLB pre-game</h1>
         <span className="app-date">{todayLabel}</span>
       </header>
 
@@ -30,9 +31,9 @@ export default function App() {
         <PipelineStatus />
         <SeasonCompleteness />
         <TodaysSlate />
+        <StartingPitcherPredictions />
 
-        {/* Stage 2: <ModelPredictions /> goes here when built */}
-        {/* Stage 3: <BetRecommendations /> goes here when built */}
+        {/* Stage 4: <BetRecommendations /> goes here when built */}
       </main>
     </div>
   )

@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 
 import completeness_audit
 import s3_client
+import starting_pitcher_predictions
+from game_odds import extract_game_odds
 
 CT = zoneinfo.ZoneInfo("America/Chicago")
 
@@ -151,8 +153,13 @@ def today_slate(date_param: Optional[str] = Query(default=None, alias="date")):
     try:
         odds_df = s3_client.get_s3_parquet(S3_BUCKET, f"raw_data/odds/team_odds/{year}/{target_date}.parquet")
         odds_pairs = set(zip(odds_df["home_team"], odds_df["away_team"]))
+        odds_by_pair = {
+            (row["home_team"], row["away_team"]): row["bookmakers"]
+            for _, row in odds_df.iterrows()
+        }
     except FileNotFoundError:
         odds_pairs = set()
+        odds_by_pair = {}
 
     games = []
     for game in sorted(schedule, key=lambda g: g["game_time_utc"]):
@@ -169,6 +176,7 @@ def today_slate(date_param: Optional[str] = Query(default=None, alias="date")):
             "venue": game["venue_name"],
             "lineup_status": lineup_status,
             "has_odds": (home, away) in odds_pairs,
+            "odds": extract_game_odds(odds_by_pair.get((home, away))),
             "prediction": None,
         })
         
@@ -184,6 +192,17 @@ def season_completeness(year: Optional[str] = Query(default=None)):
     """
     target_year = year or str(date.today().year)
     return completeness_audit.run_season_completeness_audit(S3_BUCKET, target_year)
+
+
+@app.get("/api/starting-pitcher-predictions")
+def starting_pitcher_predictions_route():
+    """
+    Batters-faced / strikeouts / early-out predictions for today's starting pitchers.
+    Placeholder data — see starting_pitcher_predictions.py's module docstring for why.
+    """
+    year = str(date.today().year)
+    games = _load_schedule(year, str(date.today()), use_latest=True)
+    return starting_pitcher_predictions.get_placeholder_predictions(games)
 
 
 @app.get("/api/pipeline-status")
