@@ -3,7 +3,9 @@ import pytest
 
 from models.hit_predictor.processing.features.park_factors import (
     _create_venue_hit_factor,
+    _create_venue_strikeout_factor,
     build_park_factors,
+    build_park_strikeout_factor,
 )
 
 
@@ -65,6 +67,68 @@ def test_create_venue_hit_factor_guards_zero_ab():
     result = _create_venue_hit_factor(schedule, batter_boxscore)
 
     assert result['park_season_hit_factor'].isna().all()
+
+
+def _make_pitcher_boxscore():
+    # V1 games: 8 k / 16 ip combined = 0.500 k/ip
+    # V2 games: 4 k / 16 ip combined = 0.250 k/ip
+    # League (both venues): 12 k / 32 ip = 0.375 k/ip
+    return pd.DataFrame([
+        {'gamepk': 'g1', 'personId': 'A', 'k': 2, 'ip': 4},
+        {'gamepk': 'g1', 'personId': 'B', 'k': 2, 'ip': 4},
+        {'gamepk': 'g2', 'personId': 'A', 'k': 3, 'ip': 4},
+        {'gamepk': 'g2', 'personId': 'B', 'k': 1, 'ip': 4},
+        {'gamepk': 'g3', 'personId': 'C', 'k': 1, 'ip': 4},
+        {'gamepk': 'g3', 'personId': 'D', 'k': 1, 'ip': 4},
+        {'gamepk': 'g4', 'personId': 'C', 'k': 1, 'ip': 4},
+        {'gamepk': 'g4', 'personId': 'D', 'k': 1, 'ip': 4},
+    ])
+
+
+def test_create_venue_strikeout_factor_strikeout_friendly_park_above_one():
+    """V1's combined K rate (0.500 k/ip) is above the league rate (0.375
+    k/ip) that season, so its factor should be > 1 — a strikeout-friendly
+    park. Hand-computed: 0.500 / 0.375 = 1.3333..."""
+
+    result = _create_venue_strikeout_factor(_make_schedule(), _make_pitcher_boxscore())
+    row = result[(result['venue_id'] == 'V1') & (result['game_season'] == 2023)].iloc[0]
+
+    assert row['park_season_strikeout_factor'] == pytest.approx(4 / 3)
+
+
+def test_create_venue_strikeout_factor_strikeout_suppressing_park_below_one():
+    """V2's combined K rate (0.250 k/ip) is below the league rate (0.375
+    k/ip), so its factor should be < 1 — a strikeout-suppressing park.
+    Hand-computed: 0.250 / 0.375 = 0.6667..."""
+
+    result = _create_venue_strikeout_factor(_make_schedule(), _make_pitcher_boxscore())
+    row = result[(result['venue_id'] == 'V2') & (result['game_season'] == 2023)].iloc[0]
+
+    assert row['park_season_strikeout_factor'] == pytest.approx(2 / 3)
+
+
+def test_create_venue_strikeout_factor_guards_zero_ip():
+    """A venue-season with zero recorded IP must not raise a divide-by-zero
+    error — it should produce NaN instead."""
+
+    schedule = pd.DataFrame([{'gamepk': 'g1', 'venue_id': 'V1', 'game_date': pd.Timestamp('2023-04-01')}])
+    pitcher_boxscore = pd.DataFrame([{'gamepk': 'g1', 'personId': 'A', 'k': 0, 'ip': 0}])
+
+    result = _create_venue_strikeout_factor(schedule, pitcher_boxscore)
+
+    assert result['park_season_strikeout_factor'].isna().all()
+
+
+def test_build_park_strikeout_factor_shifts_to_next_season():
+    """Same point-in-time-safe convention as build_park_factors."""
+
+    result = build_park_strikeout_factor(_make_schedule(), _make_pitcher_boxscore())
+    row = result[result['venue_id'] == 'V1'].iloc[0]
+
+    assert row['game_season'] == 2024
+    assert 'park_last_season_strikeout_factor' in result.columns
+    assert 'park_season_strikeout_factor' not in result.columns
+    assert row['park_last_season_strikeout_factor'] == pytest.approx(4 / 3)
 
 
 def test_build_park_factors_shifts_to_next_season():

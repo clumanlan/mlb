@@ -1,0 +1,289 @@
+<title>batters_faced_predictor v2 error analysis</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1c1c1e; --sub: #6b6b70;
+    --line: #e4e4e2; --accent: #b8542f; --accent-soft: #f4e3da;
+    --under: #b8542f; --over: #2f6f8f; --good: #2f7a4f; --flag: #b8542f; --control: #6b6b70;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17171a; --panel: #1f1f23; --ink: #ece9e6; --sub: #9a9aa0;
+      --line: #313136; --accent: #e07a4f; --accent-soft: #3a271e;
+      --under: #e07a4f; --over: #6fb3d2; --good: #6fcf97; --flag: #e07a4f; --control: #9a9aa0;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17171a; --panel: #1f1f23; --ink: #ece9e6; --sub: #9a9aa0;
+    --line: #313136; --accent: #e07a4f; --accent-soft: #3a271e;
+    --under: #e07a4f; --over: #6fb3d2; --good: #6fcf97; --flag: #e07a4f; --control: #9a9aa0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    line-height: 1.5; padding: 2.5rem 1.5rem 5rem; overflow-wrap: anywhere;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--sub); font-size: 0.92rem; margin-bottom: 2rem; }
+  .subtitle code { font-family: var(--mono); background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 4px; }
+  h2 { font-size: 1.05rem; margin: 2.5rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 0.95rem; margin: 1.25rem 0 0.5rem; }
+  p.finding { margin: 0.5rem 0; font-size: 0.92rem; }
+  p.finding b { color: var(--ink); }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.25rem 1.4rem; margin-bottom: 1rem; min-width: 0;
+  }
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.9rem; margin: 1rem 0 1.5rem; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; min-width: 0; }
+  .stat .label { font-size: 0.72rem; color: var(--sub); text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat .value { font-size: 1.35rem; font-weight: 600; margin-top: 0.15rem; font-family: var(--mono); }
+  .stat .value.flag { color: var(--flag); }
+  .stat .value.control { color: var(--control); }
+  .badge { display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.55rem; border-radius: 999px; }
+  .badge.flag { background: var(--accent-soft); color: var(--flag); }
+  .badge.control { background: rgba(107,107,112,0.12); color: var(--control); }
+  .badge.good { background: rgba(47,122,79,0.12); color: var(--good); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  th, td { text-align: right; padding: 0.4rem 0.55rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--sub); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+  tr:last-child td { border-bottom: none; }
+  tr.flag td:first-child { border-left: 3px solid var(--flag); }
+  tr.control td:first-child { border-left: 3px solid var(--control); }
+
+  /* CV strip plot */
+  .strip { position: relative; height: 3.6rem; margin: 0.5rem 0 0.25rem; }
+  .strip .axis { position: absolute; bottom: 0; left: 0; right: 0; height: 1px; background: var(--line); }
+  .strip .tick { position: absolute; bottom: -1.3rem; font-size: 0.68rem; color: var(--sub); transform: translateX(-50%); font-family: var(--mono); }
+  .strip .dot { position: absolute; bottom: 0.15rem; width: 0.55rem; height: 0.55rem; border-radius: 50%; transform: translateX(-50%); }
+  .strip .dot.flag { background: var(--flag); }
+  .strip .dot.control { background: var(--control); opacity: 0.7; }
+  .legend { display: flex; gap: 1.2rem; font-size: 0.78rem; color: var(--sub); margin: 1.6rem 0 0.5rem; }
+  .legend .dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
+  .legend .dot.flag { background: var(--flag); }
+  .legend .dot.control { background: var(--control); }
+
+  /* Sparkline bars per pitcher */
+  .spark-name { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.15rem; }
+  .spark-meta { font-size: 0.74rem; color: var(--sub); margin-bottom: 0.4rem; font-family: var(--mono); }
+  .spark { display: flex; align-items: flex-end; gap: 2px; height: 3.2rem; margin-bottom: 1.1rem; }
+  .spark .bar { flex: 1 1 auto; min-width: 3px; background: var(--over); border-radius: 2px 2px 0 0; }
+  .spark .bar.low { background: var(--under); }
+
+  .priority { display: flex; gap: 0.9rem; align-items: flex-start; padding: 1rem 0; border-bottom: 1px solid var(--line); }
+  .priority:last-child { border-bottom: none; }
+  .priority .num {
+    flex: 0 0 auto; width: 1.7rem; height: 1.7rem; border-radius: 50%; background: var(--accent);
+    color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem;
+  }
+  .priority .body h4 { margin: 0 0 0.3rem; font-size: 0.95rem; }
+  .priority .body p { margin: 0.25rem 0; font-size: 0.88rem; color: var(--sub); }
+  .priority .body code { font-family: var(--mono); background: var(--accent-soft); color: var(--ink); padding: 0.05rem 0.35rem; border-radius: 4px; font-size: 0.82rem; }
+  .tag { display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.1rem 0.5rem; border-radius: 5px; background: var(--panel); border: 1px solid var(--line); color: var(--sub); margin-right: 0.35rem; }
+  footer { margin-top: 3rem; color: var(--sub); font-size: 0.78rem; }
+  footer code { font-family: var(--mono); }
+</style>
+
+<div class="wrap">
+  <h1>batters_faced_predictor v2 — residual + volatility follow-up</h1>
+  <div class="subtitle">
+    Val season 2024 &middot; tuned XGBoost from <code>v2_workload_and_rest</code> &middot;
+    sanity-checked MAE <code>2.6471</code> (matches <code>v2_results.md</code>) &middot;
+    cold-start bucket excluded (already closed by v3)
+  </div>
+
+  <div class="stat-row">
+    <div class="stat"><div class="label">Flagged pitchers</div><div class="value flag">10</div></div>
+    <div class="stat"><div class="label">Control pitchers</div><div class="value control">15</div></div>
+    <div class="stat"><div class="label">Flagged mean CV</div><div class="value flag">0.238</div></div>
+    <div class="stat"><div class="label">Control mean CV</div><div class="value control">0.139</div></div>
+  </div>
+
+  <h2>Bucket cuts came back flat</h2>
+  <p class="finding">
+    Weather, month, day-of-week, doubleheader, venue, score margin, opposing-lineup strength,
+    rest days, workload-density quartile, and PA-trend direction all sit in a narrow
+    <b>2.2&ndash;2.8 MAE band</b> &mdash; no hidden lever there (full breakdown in
+    <code>error_analysis_v2.md</code>). The signal is in the <b>worked examples</b>, not the
+    aggregate cuts.
+  </p>
+
+  <h2>What &ldquo;control&rdquo; means here, and how it&rsquo;s calculated</h2>
+  <div class="card">
+    <p class="finding">
+      <b>Flagged group (10):</b> pitchers pulled from <code>error_analysis_v2.md</code>&rsquo;s
+      worked examples &mdash; three (Su&aacute;rez, Montas, Rodriguez) appear in <i>both</i> the
+      worst-over- and worst-under-prediction lists (alternating between huge misses in opposite
+      directions), plus repeat over-predictions with a known real-world workload-management
+      storyline (Skenes, Crochet, Yamamoto, Kershaw, J.&nbsp;Ryan, J.&nbsp;Steele) and one
+      repeat-<i>under</i>-prediction case in the opposite direction (Gausman, who just goes deep
+      relentlessly).
+    </p>
+    <p class="finding">
+      <b>Control group (15):</b> a fair &ldquo;what does normal look like&rdquo; baseline &mdash;
+      every 2024 val-season pitcher with <b>15+ starts</b> (the same established-starter bar the
+      flagged group clears, so it's apples-to-apples, not comparing a veteran against a
+      part-timer), <i>excluding</i> the flagged names, then a random sample of 15 from what's left
+      (fixed seed, not cherry-picked).
+    </p>
+    <p class="finding">
+      <b>Metric:</b> for every pitcher in both groups, the season-long <b>coefficient of
+      variation</b> (std &divide; mean) of <code>realized_batters_faced</code> per start. CV
+      instead of raw std because it normalizes for a pitcher's own average workload &mdash; a
+      26-BF/start ace and an 18-BF/start innings-eater shouldn't be compared on raw swing size.
+    </p>
+  </div>
+
+  <h2>The separation is clean, not a coincidence of 1&ndash;2 outliers</h2>
+  <div class="card">
+    <div class="legend">
+      <span><span class="dot flag"></span>flagged (n=10)</span>
+      <span><span class="dot control"></span>control (n=15)</span>
+    </div>
+    <div class="strip" id="strip"></div>
+    <p class="finding" style="margin-top:2.2rem">
+      <b>9 of 10 flagged pitchers sit above every single control pitcher's CV</b> &mdash; only
+      Joe Ryan (0.166) overlaps the top of the control range (max 0.180). Mean CV
+      <b>0.238 vs. 0.139</b>, a 71% relative gap; mean std <b>5.06 vs. 3.17</b> batters faced per
+      start.
+    </p>
+  </div>
+
+  <h3>Full comparison table</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>pitcher</th><th>group</th><th>n starts</th><th>mean BF</th><th>std BF</th><th>CV</th></tr></thead>
+      <tbody id="table-body"></tbody>
+    </table>
+  </div>
+
+  <h2>Flagged pitchers' full 2024 start-by-start batters faced</h2>
+  <p class="finding">
+    Each bar is one start (chronological, left&rarr;right). Orange = above that pitcher's own
+    season mean, blue = below. The point isn't any single dip &mdash; it's how often these
+    pitchers swing between a full start and a truncated one with no visible cause in the box
+    score.
+  </p>
+  <div class="card" id="sparks"></div>
+
+  <h2>Candidate v4 feature</h2>
+  <div class="card">
+    <div class="priority">
+      <div class="num">1</div>
+      <div class="body">
+        <h4>Trailing-N-start volatility <span class="tag">needs new function</span></h4>
+        <p>
+          Std dev (or CV) of <code>realized_batters_faced</code> over the pitcher's last 3&ndash;5
+          starts, mirroring the existing <code>pitcher_last3_start_pa_*</code> trailing-window
+          pattern already in <code>game_context.py</code>. Distinct from everything v2 already
+          has: season average (level), 3-start trend (direction), and workload density &mdash;
+          none of those capture that a pitcher is <i>unpredictable</i> independent of his recent
+          average or trend.
+        </p>
+        <p>
+          <b>Caveat to test, not assume:</b> this measures uncertainty, not direction &mdash; it
+          tells the model &ldquo;this one's a coin flip&rdquo; but not which way the next start
+          will land. It may help XGBoost's splits (e.g. discount the cascade harder when
+          volatility is high) more than it moves aggregate MAE on its own &mdash; worth checking
+          both in a real v4 run.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Generated from <code>experiments/residual_error_analysis_v2/run.py</code> and
+    <code>experiments/residual_error_analysis_v2/game_log_check.py</code> &middot; full worked
+    examples, every bucket cut, and per-pitcher game logs in
+    <code>error_analysis_v2.md</code> / <code>game_log_check.md</code>
+  </footer>
+</div>
+
+<script>
+  const flagged = [
+    {name: "Ranger Suarez", n: 27, mean: 23.185, std: 5.046, cv: 0.218, bf: [18,23,22,32,23,26,27,25,23,27,25,6,27,27,23,26,26,23,27,24,20,18,19,29,22,23,15]},
+    {name: "Frankie Montas", n: 30, mean: 22.067, std: 5.349, cv: 0.242, bf: [21,25,23,13,3,24,24,23,28,26,25,12,21,23,24,22,30,22,27,24,19,24,23,25,27,23,22,25,17,17]},
+    {name: "Yariel Rodriguez", n: 21, mean: 17.619, std: 5.084, cv: 0.289, bf: [16,16,20,20,9,4,23,20,19,20,9,19,23,21,20,24,13,17,17,19,21]},
+    {name: "Paul Skenes", n: 22, mean: 22.409, std: 4.532, cv: 0.202, bf: [21,19,23,23,23,24,27,24,27,23,29,25,22,25,25,19,21,23,24,22,18,6]},
+    {name: "Garrett Crochet", n: 31, mean: 19.194, std: 4.750, cv: 0.247, bf: [23,25,19,21,16,21,18,21,23,21,21,22,25,24,25,27,21,26,21,6,18,18,16,16,16,16,13,12,15,13,16]},
+    {name: "Yoshinobu Yamamoto", n: 18, mean: 20.500, std: 5.983, cv: 0.292, bf: [9,17,21,19,27,23,24,29,24,27,23,26,25,8,15,17,17,18]},
+    {name: "Clayton Kershaw", n: 7, mean: 19.286, std: 5.678, cv: 0.294, bf: [20,21,20,21,21,25,7]},
+    {name: "Joe Ryan", n: 23, mean: 23.435, std: 3.883, cv: 0.166, bf: [20,24,26,23,23,23,23,27,23,25,25,24,25,25,24,24,27,24,25,25,23,24,7]},
+    {name: "Justin Steele", n: 24, mean: 23.125, std: 5.448, cv: 0.236, bf: [18,18,20,25,27,25,27,28,22,26,29,24,32,24,25,24,25,26,27,8,24,23,12,16]},
+    {name: "Kevin Gausman", n: 31, mean: 24.452, std: 4.850, cv: 0.198, bf: [16,11,21,21,28,27,21,20,26,21,22,27,32,23,27,26,26,27,27,28,34,23,30,27,22,23,24,26,31,16,25]},
+  ];
+  const control = [
+    {id: "601713", n: 26, mean: 22.000, std: 3.111, cv: 0.141},
+    {id: "506433", n: 16, mean: 20.750, std: 3.697, cv: 0.178},
+    {id: "657277", n: 33, mean: 25.576, std: 2.979, cv: 0.116},
+    {id: "656288", n: 31, mean: 23.226, std: 2.642, cv: 0.114},
+    {id: "641927", n: 29, mean: 22.793, std: 3.649, cv: 0.160},
+    {id: "607192", n: 22, mean: 23.864, std: 2.883, cv: 0.121},
+    {id: "594902", n: 29, mean: 21.862, std: 3.749, cv: 0.171},
+    {id: "579328", n: 32, mean: 23.094, std: 2.955, cv: 0.128},
+    {id: "672456", n: 15, mean: 22.467, std: 3.461, cv: 0.154},
+    {id: "527048", n: 26, mean: 22.731, std: 3.436, cv: 0.151},
+    {id: "519242", n: 27, mean: 24.222, std: 2.607, cv: 0.108},
+    {id: "592351", n: 19, mean: 21.684, std: 3.902, cv: 0.180},
+    {id: "641712", n: 18, mean: 22.556, std: 3.148, cv: 0.140},
+    {id: "650633", n: 30, mean: 23.667, std: 2.090, cv: 0.088},
+    {id: "686613", n: 30, mean: 23.167, std: 3.185, cv: 0.137},
+  ];
+
+  // Strip plot
+  const strip = document.getElementById("strip");
+  const allCv = [...flagged.map(d => d.cv), ...control.map(d => d.cv)];
+  const min = 0.06, max = 0.31;
+  function pct(v) { return ((v - min) / (max - min)) * 100; }
+  const axis = document.createElement("div"); axis.className = "axis"; strip.appendChild(axis);
+  [0.10, 0.15, 0.20, 0.25, 0.30].forEach(t => {
+    const tick = document.createElement("div"); tick.className = "tick";
+    tick.style.left = pct(t) + "%"; tick.textContent = t.toFixed(2);
+    strip.appendChild(tick);
+  });
+  control.forEach(d => {
+    const dot = document.createElement("div"); dot.className = "dot control";
+    dot.style.left = pct(d.cv) + "%"; dot.style.bottom = "0.15rem";
+    strip.appendChild(dot);
+  });
+  flagged.forEach((d, i) => {
+    const dot = document.createElement("div"); dot.className = "dot flag";
+    dot.style.left = pct(d.cv) + "%"; dot.style.bottom = (0.15 + (i % 3) * 0.7) + "rem";
+    strip.appendChild(dot);
+  });
+
+  // Table
+  const tbody = document.getElementById("table-body");
+  const rows = [
+    ...flagged.map(d => ({...d, label: d.name, group: "flag"})),
+    ...control.map(d => ({...d, label: "personId " + d.id, group: "control"})),
+  ].sort((a, b) => b.cv - a.cv);
+  rows.forEach(d => {
+    const tr = document.createElement("tr"); tr.className = d.group;
+    tr.innerHTML = `<td>${d.label}</td><td><span class="badge ${d.group}">${d.group === "flag" ? "flagged" : "control"}</span></td>` +
+      `<td>${d.n}</td><td>${d.mean.toFixed(2)}</td><td>${d.std.toFixed(2)}</td><td><b>${d.cv.toFixed(3)}</b></td>`;
+    tbody.appendChild(tr);
+  });
+
+  // Sparklines
+  const sparks = document.getElementById("sparks");
+  flagged.forEach(d => {
+    const name = document.createElement("div"); name.className = "spark-name"; name.textContent = d.name;
+    const meta = document.createElement("div"); meta.className = "spark-meta";
+    meta.textContent = `n=${d.n} · mean ${d.mean.toFixed(1)} BF · CV ${d.cv.toFixed(3)}`;
+    const row = document.createElement("div"); row.className = "spark";
+    const maxBf = Math.max(...d.bf);
+    d.bf.forEach(v => {
+      const bar = document.createElement("div");
+      bar.className = "bar" + (v < d.mean ? " low" : "");
+      bar.style.height = Math.max(6, (v / maxBf) * 100) + "%";
+      bar.title = v + " BF";
+      row.appendChild(bar);
+    });
+    sparks.appendChild(name); sparks.appendChild(meta); sparks.appendChild(row);
+  });
+</script>

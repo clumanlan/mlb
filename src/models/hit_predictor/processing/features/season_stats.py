@@ -74,6 +74,11 @@ def _create_boxscore_batter_stats(batter_boxscore):
         .assign(
             batter_season_ba = lambda x: np.round(x['batter_season_h'] / x['batter_season_ab'].replace(0, np.nan), 2),
             batter_season_slg = lambda x: np.round(x['batter_season_total_bases_from_h'] / x['batter_season_ab'].replace(0, np.nan), 2),
+            batter_season_obp = lambda x: np.round(
+                (x['batter_season_h'] + x['batter_season_bb'])
+                / (x['batter_season_ab'] + x['batter_season_bb']).replace(0, np.nan),
+                2
+            ),
         )
         .assign(
             batter_season_iso = lambda x: np.round(x['batter_season_slg'] - x['batter_season_ba'], 2),
@@ -504,6 +509,7 @@ def _create_pitcher_stuff_command_stats(pbp_role, entity_col: str = 'pitcher_id'
         .reset_index()
     )
 
+    df['command_csw_rate'] = df['command_called_strike_rate'] + df['command_swinging_strike_rate']
 
     return _prefix_stat_cols(df, prefix='pitcher_season_', key_cols=group_cols)
 

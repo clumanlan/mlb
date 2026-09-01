@@ -1,8 +1,12 @@
+import numpy as np
 import pytest
+from scipy.stats import nbinom, poisson
 
 from models.hit_predictor.utils.count_distribution import (
     poisson_binomial_pmf,
     poisson_binomial_mixture_pmf,
+    prob_exceeds_line,
+    negative_binomial_pmf,
 )
 
 
@@ -79,6 +83,27 @@ def test_poisson_binomial_mixture_pmf_hand_derived_two_possible_n_values():
     assert result == pytest.approx([0.375, 0.5, 0.125])
 
 
+def test_prob_exceeds_line_half_point_line():
+    """DK lines are always half-points (e.g. 1.5). P(K > 1.5) means K>=2,
+    i.e. indices 2 and 3 of the [0.125, 0.375, 0.375, 0.125] pmf
+    (poisson_binomial_pmf([0.5, 0.5, 0.5]))."""
+    pmf = [0.125, 0.375, 0.375, 0.125]
+
+    result = prob_exceeds_line(pmf, 1.5)
+
+    assert result == pytest.approx(0.375 + 0.125)
+
+
+def test_prob_exceeds_line_lower_line_sums_more_mass():
+    """A lower line (0.5) should sum more of the pmf's tail than a higher
+    one (1.5) -- P(K > 0.5) means K>=1, indices 1, 2, and 3."""
+    pmf = [0.125, 0.375, 0.375, 0.125]
+
+    result = prob_exceeds_line(pmf, 0.5)
+
+    assert result == pytest.approx(0.375 + 0.375 + 0.125)
+
+
 def test_poisson_binomial_mixture_pmf_sums_to_one():
     """A real probability distribution over 0..N successes must sum to 1.0
     regardless of how uncertain N itself is — a standing regression guard,
@@ -91,3 +116,47 @@ def test_poisson_binomial_mixture_pmf_sums_to_one():
 
     assert sum(result) == pytest.approx(1.0)
     assert len(result) == len(probabilities) + 1
+
+
+class TestNegativeBinomialPmf:
+    def test_negative_binomial_pmf_matches_scipy_nbinom_at_known_params(self):
+        """Pins the NB2 parameterization convention (variance = mean +
+        alpha*mean^2, i.e. n=1/alpha, p=n/(n+mean)) against scipy's own
+        (n, p) convention, so a future reader can't silently flip mean/
+        variance."""
+        mean, alpha, max_k = 5.0, 0.3, 20
+        n = 1.0 / alpha
+        p = n / (n + mean)
+        expected = nbinom.pmf(np.arange(max_k + 1), n, p)
+
+        result = negative_binomial_pmf(mean, alpha, max_k)
+
+        assert result == pytest.approx(expected)
+
+    def test_negative_binomial_pmf_small_alpha_approximates_poisson(self):
+        """As alpha -> 0, NB2 converges to Poisson(mean) -- a real limiting
+        property. Also implicitly guards against a division-by-zero on
+        n = 1/alpha blowing up numerically for small-but-nonzero alpha."""
+        mean, max_k = 4.0, 20
+        expected = poisson.pmf(np.arange(max_k + 1), mean)
+
+        result = negative_binomial_pmf(mean, 1e-6, max_k)
+
+        assert result == pytest.approx(expected, abs=1e-3)
+
+    @pytest.mark.parametrize("mean", [2.0, 5.0, 9.0])
+    @pytest.mark.parametrize("alpha", [0.05, 0.3, 1.0])
+    def test_negative_binomial_pmf_is_a_valid_distribution(self, mean, alpha):
+        """0.95 rather than 0.99 -- at the most dispersed corner of this grid
+        (alpha=1.0, mean=9.0, variance=90) NB2's tail genuinely carries more
+        than 1% of its mass past k=30 (verified against scipy.stats.nbinom's
+        own CDF directly, not an implementation artifact), so 0.99 would fail
+        on correct output. 0.95 still catches a badly broken pmf (wrong
+        normalization, NaNs) while accommodating that real truncation loss."""
+        max_k = 30
+
+        result = negative_binomial_pmf(mean, alpha, max_k)
+
+        assert len(result) == max_k + 1
+        assert (result >= 0).all()
+        assert sum(result) >= 0.95

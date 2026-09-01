@@ -136,6 +136,7 @@ def build_batter_rolling_stats(batter_boxscore: pd.DataFrame, window: str | int)
         .assign(
             ba = lambda x: x['h'] / x['ab'].replace(0, np.nan),
             slg = lambda x: x['total_bases_from_h'] / x['ab'].replace(0, np.nan),
+            obp = lambda x: (x['h'] + x['bb']) / (x['ab'] + x['bb']).replace(0, np.nan),
         )
         .assign(
             iso = lambda x: x['slg'] - x['ba'],
@@ -310,6 +311,9 @@ def _pitcher_pa_outcome_per_game(pbp: pd.DataFrame, entity_col: str = 'pitcher_i
         .reset_index(drop=True)
     )
 
+    pa_max_strikes = pbp.groupby(['gamepk', 'play_id'])['count_strikes'].max().rename('pa_max_strikes')
+    last_pitch_pbp = last_pitch_pbp.merge(pa_max_strikes, on=['gamepk', 'play_id'], how='left')
+
     return (
         last_pitch_pbp
         .groupby(group_cols)
@@ -329,6 +333,10 @@ def _pitcher_pa_outcome_per_game(pbp: pd.DataFrame, entity_col: str = 'pitcher_i
             pa_final_strikes_sum=('count_strikes', 'sum'), pa_final_strikes_n=('count_strikes', 'count'),
             pa_full_count_n=('count_balls', lambda x: (
                 (x == 3) & (last_pitch_pbp.loc[x.index, 'count_strikes'] == 2)
+            ).sum()),
+            pa_two_strike_reached_n=('pa_max_strikes', lambda x: (x >= 2).sum()),
+            pa_two_strike_strikeout_n=('play_result', lambda x: (
+                x.isin({"Strikeout", "Strikeout Double Play"}) & (last_pitch_pbp.loc[x.index, 'pa_max_strikes'] >= 2)
             ).sum()),
         )
         .reset_index()
@@ -446,6 +454,7 @@ def build_pbp_pitcher_rolling_feats(
         'pa_total', 'pa_pitch_count_sum', 'pa_strikeout_n', 'pa_walk_n', 'pa_hbp_n', 'pa_hit_n', 'pa_hr_n', 'pa_single_n',
         'pa_xbh_n', 'pa_fip_bb_n', 'pa_final_balls_sum', 'pa_final_balls_n',
         'pa_final_strikes_sum', 'pa_final_strikes_n', 'pa_full_count_n',
+        'pa_two_strike_reached_n', 'pa_two_strike_strikeout_n',
         'games_n', 'last_inning_inning', 'last_inning_velo',
         'last_inning_ball', 'last_inning_strike', 'last_inning_balls', 'last_inning_strikes',
         'pitch_count_sum_src',
@@ -494,6 +503,9 @@ def build_pbp_pitcher_rolling_feats(
         command_ball_rate = lambda x: x['command_ball_n'] / x['n_pitches'].replace(0, np.nan),
         command_strike_rate = lambda x: x['command_strike_n'] / x['n_pitches'].replace(0, np.nan),
         command_called_strike_rate = lambda x: x['command_called_strike_n'] / x['n_pitches'].replace(0, np.nan),
+        command_csw_rate = lambda x: (
+            (x['command_called_strike_n'] + x['command_swinging_strike_n']) / x['n_pitches'].replace(0, np.nan)
+        ),
         command_chase_rate = lambda x: x['command_chase_n'] / x['n_pitches'].replace(0, np.nan),
         command_zone_swing_rate = lambda x: x['command_zone_swing_n'] / x['n_pitches'].replace(0, np.nan),
         command_first_pitch_strike_rate = lambda x: x['command_first_pitch_strike_n'] / x['n_pitches'].replace(0, np.nan),
@@ -509,6 +521,8 @@ def build_pbp_pitcher_rolling_feats(
         pa_avg_final_balls = lambda x: x['pa_final_balls_sum'] / x['pa_final_balls_n'].replace(0, np.nan),
         pa_avg_final_strikes = lambda x: x['pa_final_strikes_sum'] / x['pa_final_strikes_n'].replace(0, np.nan),
         pa_full_count_rate = lambda x: x['pa_full_count_n'] / x['pa_total'].replace(0, np.nan),
+        pa_two_strike_reach_rate = lambda x: x['pa_two_strike_reached_n'] / x['pa_total'].replace(0, np.nan),
+        pa_put_away_rate = lambda x: x['pa_two_strike_strikeout_n'] / x['pa_two_strike_reached_n'].replace(0, np.nan),
 
         last_inning_avg = lambda x: x['last_inning_inning'] / x['games_n'].replace(0, np.nan),
         last_inning_avg_velo = lambda x: x['last_inning_velo'] / x['games_n'].replace(0, np.nan),
@@ -547,11 +561,12 @@ def build_pbp_pitcher_rolling_feats(
         'command_in_play_rate', 'command_swinging_strike_rate',
         'command_plate_x_std', 'command_plate_z_normalized_std',
         'command_zone_rate', 'command_ball_rate', 'command_strike_rate', 'command_called_strike_rate',
+        'command_csw_rate',
         'command_chase_rate', 'command_zone_swing_rate', 'command_first_pitch_strike_rate',
         'pa_pitch_count_mean', 'pa_pitch_count_std',
         'pa_strikeout_rate', 'pa_walk_rate', 'pa_hbp_rate', 'pa_hit_rate', 'pa_hr_rate',
         'pa_single_rate', 'pa_xbh_rate', 'pa_avg_final_balls', 'pa_avg_final_strikes',
-        'pa_full_count_rate', 'pa_fip',
+        'pa_full_count_rate', 'pa_two_strike_reach_rate', 'pa_put_away_rate', 'pa_fip',
         'last_inning_avg', 'last_inning_std', 'last_inning_avg_velo',
         'last_inning_ball_rate', 'last_inning_strike_rate',
         'last_inning_avg_balls', 'last_inning_avg_strikes', 'last_inning_outs',
@@ -562,7 +577,7 @@ def build_pbp_pitcher_rolling_feats(
         # features (not just consumed internally) so a model can learn to
         # trust a rate less when it's built from a thin window, an implicit
         # substitute for hand-designed shrinkage. See FEATURE_GLOSSARY.md.
-        'n_pitches', 'pa_total', 'contact_n', 'games_n',
+        'n_pitches', 'pa_total', 'contact_n', 'games_n', 'pa_two_strike_reached_n',
     ]
 
     rolled = rolled[key_cols + final_cols]
@@ -615,6 +630,9 @@ def _batter_pa_outcome_per_game(pbp: pd.DataFrame) -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
+    pa_max_strikes = pbp.groupby(['gamepk', 'play_id'])['count_strikes'].max().rename('pa_max_strikes')
+    last_pitch_pbp = last_pitch_pbp.merge(pa_max_strikes, on=['gamepk', 'play_id'], how='left')
+
     return (
         last_pitch_pbp
         .groupby(group_cols)
@@ -633,6 +651,10 @@ def _batter_pa_outcome_per_game(pbp: pd.DataFrame) -> pd.DataFrame:
             pa_final_strikes_sum=('count_strikes', 'sum'), pa_final_strikes_n=('count_strikes', 'count'),
             pa_full_count_n=('count_balls', lambda x: (
                 (x == 3) & (last_pitch_pbp.loc[x.index, 'count_strikes'] == 2)
+            ).sum()),
+            pa_two_strike_reached_n=('pa_max_strikes', lambda x: (x >= 2).sum()),
+            pa_two_strike_strikeout_n=('play_result', lambda x: (
+                x.isin({"Strikeout", "Strikeout Double Play"}) & (last_pitch_pbp.loc[x.index, 'pa_max_strikes'] >= 2)
             ).sum()),
         )
         .reset_index()
@@ -775,6 +797,7 @@ def build_pbp_batter_rolling_feats(pbp: pd.DataFrame, window: str | int) -> pd.D
         'pa_total', 'pa_pitch_count_sum', 'pa_strikeout_n', 'pa_walk_n', 'pa_hbp_n', 'pa_hit_n',
         'pa_hr_n', 'pa_single_n', 'pa_xbh_n', 'pa_final_balls_sum', 'pa_final_balls_n',
         'pa_final_strikes_sum', 'pa_final_strikes_n', 'pa_full_count_n',
+        'pa_two_strike_reached_n', 'pa_two_strike_strikeout_n',
         'chase_n', 'zone_swing_n', 'swinging_strike_n', 'zone_n', 'n_pitches',
         'swing_n', 'contact_n',
         'hard_hit_n', 'launch_speed_valid_n', 'sweet_spot_n', 'launch_angle_valid_n',
@@ -803,6 +826,8 @@ def build_pbp_batter_rolling_feats(pbp: pd.DataFrame, window: str | int) -> pd.D
         pa_avg_final_balls = lambda x: x['pa_final_balls_sum'] / x['pa_final_balls_n'].replace(0, np.nan),
         pa_avg_final_strikes = lambda x: x['pa_final_strikes_sum'] / x['pa_final_strikes_n'].replace(0, np.nan),
         pa_full_count_rate = lambda x: x['pa_full_count_n'] / x['pa_total'].replace(0, np.nan),
+        pa_two_strike_reach_rate = lambda x: x['pa_two_strike_reached_n'] / x['pa_total'].replace(0, np.nan),
+        pa_put_away_rate = lambda x: x['pa_two_strike_strikeout_n'] / x['pa_two_strike_reached_n'].replace(0, np.nan),
 
         o_swing_rate = lambda x: x['chase_n'] / x['n_pitches'].replace(0, np.nan),
         z_swing_rate = lambda x: x['zone_swing_n'] / x['n_pitches'].replace(0, np.nan),
@@ -828,7 +853,7 @@ def build_pbp_batter_rolling_feats(pbp: pd.DataFrame, window: str | int) -> pd.D
         'pa_pitch_count_mean', 'pa_pitch_count_std',
         'pa_strikeout_rate', 'pa_walk_rate', 'pa_hbp_rate', 'pa_hit_rate', 'pa_hr_rate',
         'pa_single_rate', 'pa_xbh_rate', 'pa_avg_final_balls', 'pa_avg_final_strikes',
-        'pa_full_count_rate',
+        'pa_full_count_rate', 'pa_two_strike_reach_rate', 'pa_put_away_rate',
         'o_swing_rate', 'z_swing_rate', 'swinging_strike_rate', 'zone_rate', 'contact_rate',
         'contact_hard_hit_rate', 'contact_sweet_spot_rate', 'contact_gb_rate', 'contact_fb_rate',
         'contact_ld_rate', 'contact_avg_launch_speed', 'contact_avg_launch_angle',
@@ -839,7 +864,7 @@ def build_pbp_batter_rolling_feats(pbp: pd.DataFrame, window: str | int) -> pd.D
         # trust a rate less when it's built from a thin window, an implicit
         # substitute for hand-designed shrinkage. See FEATURE_GLOSSARY.md.
         'n_pitches', 'pa_total', 'swing_n', 'contact_trajectory_n',
-        'foul_swing_n', 'foul_or_inplay_n', 'two_strike_swing_n',
+        'foul_swing_n', 'foul_or_inplay_n', 'two_strike_swing_n', 'pa_two_strike_reached_n',
     ]
 
     rolled = rolled[key_cols + final_cols]
@@ -891,6 +916,173 @@ def build_team_batter_strikeout_rolling_feats(
     return _prefix_stat_cols(rolled, prefix=_rolling_prefix('team', window), key_cols=key_cols)
 
 
+def build_team_strikeout_volatility(
+    pbp: pd.DataFrame, batter_boxscore: pd.DataFrame, window: str | int,
+) -> pd.DataFrame:
+    """One row per (batter_team_id, gamepk): mean/std/max of that team's own
+    per-game PA strikeout rate (starting lineup only, same pooling as
+    build_team_batter_strikeout_rolling_feats), rolled forward -- shift(1) so
+    this game's own rate never leaks into its own pre-game read.
+
+    Captures strikeout-rate CEILING/volatility, not just level (see
+    build_team_batter_strikeout_rolling_feats's own pa_strikeout_rate, a
+    rolled-sums level stat) -- a thin-lineup team can spike well above its
+    own season-average K rate on a given night even if that average looks
+    unremarkable. Same mean/std/max-of-the-per-game-value treatment as
+    game_context.build_team_scoring_volatility, applied to a team's own K
+    rate instead of runs scored.
+
+    Std is NaN with fewer than 2 prior games (sample std undefined at n<=1),
+    same as build_team_scoring_volatility.
+    """
+    _validate_window(window)
+
+    starters = _create_batting_order(batter_boxscore)[['gamepk', 'batter_id']]
+    per_batter_game = _batter_pa_outcome_per_game(pbp)[PBP_BATTER_KEY_COLS + ['pa_total', 'pa_strikeout_n']]
+    team_lookup = pbp[['batter_id', 'gamepk', 'batter_team_id']].drop_duplicates()
+
+    starters_pa = per_batter_game.merge(starters, on=['gamepk', 'batter_id'], how='inner')
+    starters_pa = starters_pa.merge(team_lookup, on=['batter_id', 'gamepk'], how='left')
+
+    key_cols = ['batter_team_id', 'gamepk', 'game_date', 'game_season']
+    per_game = (
+        starters_pa
+        .groupby(key_cols)[['pa_total', 'pa_strikeout_n']]
+        .sum()
+        .reset_index()
+    )
+    per_game['team_strikeout_rate'] = per_game['pa_strikeout_n'] / per_game['pa_total'].replace(0, np.nan)
+    per_game['games_n'] = 1
+    per_game['team_strikeout_rate_sumsq'] = per_game['team_strikeout_rate'] ** 2
+
+    std_df = _rolling_pooled_std(
+        per_game, entity_col='batter_team_id', n_col='games_n', sum_col='team_strikeout_rate',
+        sumsq_col='team_strikeout_rate_sumsq', window=window, out_col='pa_strikeout_rate_std',
+    )
+    std_df['pa_strikeout_rate_mean'] = std_df['team_strikeout_rate'] / std_df['games_n'].replace(0, np.nan)
+
+    max_df = _rolling_max(
+        per_game, entity_col='batter_team_id', cols=['team_strikeout_rate'], window=window,
+    ).rename(columns={'team_strikeout_rate': 'pa_strikeout_rate_max'})
+
+    rolled = std_df[key_cols + ['pa_strikeout_rate_mean', 'pa_strikeout_rate_std']].merge(
+        max_df[key_cols + ['pa_strikeout_rate_max']], on=key_cols,
+    )
+
+    return _prefix_stat_cols(rolled, prefix=_rolling_prefix('team', window), key_cols=key_cols)
+
+
+# --------------------- PITCHER FASTBALL-ONLY STUFF + PITCH MIX (k_predictor v4) ------- #
+# build_pbp_pitcher_rolling_feats's own stuff_start_speed_mean/stuff_spin_rate_mean
+# pool EVERY pitch type a pitcher threw that game -- a mix shift (more sliders,
+# fewer fastballs) can move that pooled average with zero real change in how hard
+# the pitcher is actually throwing, since a fastball (~93-97mph) and a breaking/
+# offspeed pitch (~78-88mph) start from very different baselines. These isolate the
+# fastball-only velocity/spin level, plus the pitch-mix level and volatility.
+
+FASTBALL_PITCH_TYPES = {'Four-Seam Fastball', 'Sinker', 'Cutter'}
+# A 2024 pitch-type audit (623 qualified pitchers, 200+ pitches) found 27.4%
+# have a NON-fastball primary (most-thrown) pitch -- Cutter is the single
+# largest such group (37 of 171), ahead of any individual breaking-ball type
+# (Slider 69, Sweeper 23, Changeup 19, ...). Cutter was originally excluded
+# here as a "hybrid" pitch, but velocity-wise it sits close to a four-seamer
+# (upper-80s to low-90s), not a breaking ball -- including it closes the
+# single biggest gap in this bucket. The remaining ~21.5% whose primary pitch
+# is a true breaking/offspeed pitch is a real, separate gap this fixed bucket
+# still doesn't capture -- a pitcher's own actual primary pitch (whatever
+# type) would need a season-level categorical assignment step, not built
+# here.
+
+
+def _pitcher_fastball_mix_per_game(pbp: pd.DataFrame, entity_col: str = 'pitcher_id') -> pd.DataFrame:
+    """Per pitcher-game: total pitch count, fastball pitch count, and
+    fastball-only start_speed/spin_rate sum+n. A game with zero fastballs
+    thrown still gets a row (fastball columns filled 0) so its total pitch
+    count still counts toward the rolled denominator -- a real 0% mix game,
+    not a missing one."""
+    key_cols = _pbp_pitcher_key_cols(entity_col)
+
+    total = pbp.groupby(key_cols).size().rename('pitch_n').reset_index()
+
+    fb = pbp[pbp['pitch_type'].isin(FASTBALL_PITCH_TYPES)]
+    fb_stats = fb.groupby(key_cols).agg(
+        fastball_pitch_n=('pitch_type', 'count'),
+        fastball_start_speed_sum=('start_speed', 'sum'), fastball_start_speed_n=('start_speed', 'count'),
+        fastball_spin_rate_sum=('spin_rate', 'sum'), fastball_spin_rate_n=('spin_rate', 'count'),
+    ).reset_index()
+
+    merged = total.merge(fb_stats, on=key_cols, how='left')
+    fill_cols = [
+        'fastball_pitch_n', 'fastball_start_speed_sum', 'fastball_start_speed_n',
+        'fastball_spin_rate_sum', 'fastball_spin_rate_n',
+    ]
+    merged[fill_cols] = merged[fill_cols].fillna(0.0)
+    return merged
+
+
+def build_pitcher_fastball_rolling_feats(
+    pbp: pd.DataFrame, window: str | int, pitcher_role: str | None = None, entity_col: str = 'pitcher_id',
+) -> pd.DataFrame:
+    """fastball_pitch_rate (rolled-sums level), fastball_start_speed_mean,
+    fastball_spin_rate_mean, plus fastball_pitch_rate_std/_max (pitch-mix
+    volatility, same mean/std/max-of-per-game-value shape as
+    build_team_strikeout_volatility) -- see module note above for why this is
+    isolated from build_pbp_pitcher_rolling_feats's own pooled-across-all-
+    pitch-types stuff columns."""
+    _validate_window(window)
+
+    if pitcher_role is not None:
+        pbp = pbp[pbp['pitcher_role'] == pitcher_role]
+
+    key_cols = _pbp_pitcher_key_cols(entity_col)
+    per_game = _pitcher_fastball_mix_per_game(pbp, entity_col=entity_col)
+    per_game['fastball_pitch_rate'] = per_game['fastball_pitch_n'] / per_game['pitch_n'].replace(0, np.nan)
+    per_game['fastball_pitch_rate_sumsq'] = per_game['fastball_pitch_rate'] ** 2
+    per_game['games_n'] = 1
+
+    sum_cols = [
+        'pitch_n', 'fastball_pitch_n', 'fastball_start_speed_sum', 'fastball_start_speed_n',
+        'fastball_spin_rate_sum', 'fastball_spin_rate_n',
+    ]
+    rolled = _rolling_sum(per_game, entity_col=entity_col, cols=sum_cols, window=window)
+    rolled = rolled.assign(
+        fastball_pitch_rate=lambda x: x['fastball_pitch_n'] / x['pitch_n'].replace(0, np.nan),
+        fastball_start_speed_mean=lambda x: x['fastball_start_speed_sum'] / x['fastball_start_speed_n'].replace(0, np.nan),
+        fastball_spin_rate_mean=lambda x: x['fastball_spin_rate_sum'] / x['fastball_spin_rate_n'].replace(0, np.nan),
+    )
+
+    std_df = _rolling_pooled_std(
+        per_game, entity_col=entity_col, n_col='games_n', sum_col='fastball_pitch_rate',
+        sumsq_col='fastball_pitch_rate_sumsq', window=window, out_col='fastball_pitch_rate_std',
+    )
+    max_df = _rolling_max(
+        per_game, entity_col=entity_col, cols=['fastball_pitch_rate'], window=window,
+    ).rename(columns={'fastball_pitch_rate': 'fastball_pitch_rate_max'})
+
+    final_cols = ['fastball_pitch_rate', 'fastball_start_speed_mean', 'fastball_spin_rate_mean']
+    rolled = rolled[key_cols + final_cols]
+    rolled = rolled.merge(std_df[key_cols + ['fastball_pitch_rate_std']], on=key_cols)
+    rolled = rolled.merge(max_df[key_cols + ['fastball_pitch_rate_max']], on=key_cols)
+
+    return _prefix_stat_cols(rolled, prefix=_rolling_prefix('pitcher', window), key_cols=key_cols)
+
+
+def build_pitcher_fastball_rolling_feats_all_roles(pbp: pd.DataFrame, window: str | int) -> pd.DataFrame:
+    """Same sp/bullpen stacking shape as build_pbp_pitcher_rolling_feats_all_roles
+    -- each role's window only ever rolls forward that role's own prior games."""
+    sp = (
+        build_pitcher_fastball_rolling_feats(pbp, window=window, pitcher_role='sp')
+        .rename(columns={'pitcher_id': 'pitcher_key_id'})
+        .assign(pitcher_role='sp')
+    )
+    bullpen = (
+        build_pitcher_fastball_rolling_feats(pbp, window=window, pitcher_role='bullpen', entity_col='pitcher_team_id')
+        .rename(columns={'pitcher_team_id': 'pitcher_key_id'})
+        .assign(pitcher_role='bullpen')
+    )
+    return pd.concat([sp, bullpen], ignore_index=True)
+
+
 def build_team_batter_onbase_rolling_feats(
     pbp: pd.DataFrame, batter_boxscore: pd.DataFrame, window: str | int,
 ) -> pd.DataFrame:
@@ -933,3 +1125,87 @@ def build_team_batter_onbase_rolling_feats(
     rolled = rolled[key_cols + final_cols]
 
     return _prefix_stat_cols(rolled, prefix=_rolling_prefix('team', window), key_cols=key_cols)
+
+
+# --------------------------- LEAGUE-WIDE ROLLING CONTEXT (k_predictor v8) --------------------------- #
+# Rolling equivalent of season_stats.build_league_pa_outcome_stats, which is a
+# STATIC last-season snapshot (see that function's own docstring) -- a
+# last-season number lags a full year behind any real league-wide shift
+# (rule changes, juiced/dead-ball eras), so it can't answer "what does the
+# league look like RIGHT NOW." Pooled across the ENTIRE league (every team,
+# every batter, no starting-lineup filter, unlike build_team_batter_strikeout_
+# rolling_feats above) -- league-wide context isn't a matchup concept, so
+# there's no reason to exclude bench/pinch-hit PAs the way team-pooling does.
+#
+# There's no single per-game "entity" to roll league-wide the way one team/
+# pitcher/batter has (many games share a date) -- so both functions below
+# pool to one row per (game_season, game_date) FIRST, then roll that using a
+# constant entity column so _rolling_sum treats "the league" as one series
+# ordered by game_date. shift(1) at this date grain means no game played on
+# a given date leaks into that same date's own read. The result is naturally
+# keyed by (game_season, game_date) only -- broadcasting out to gamepk would
+# add a merge step with no informational value, since every gamepk sharing a
+# date gets an identical value by construction.
+
+def build_league_pa_outcome_rolling_feats(pbp: pd.DataFrame, window: str | int) -> pd.DataFrame:
+    _validate_window(window)
+
+    sum_cols = ['pa_total', 'pa_strikeout_n', 'pa_walk_n', 'pa_hbp_n',
+                'pa_single_n', 'pa_xbh_n', 'pa_hr_n']
+    per_batter_game = _batter_pa_outcome_per_game(pbp)[['game_date', 'game_season'] + sum_cols]
+
+    per_date = per_batter_game.groupby(['game_season', 'game_date'])[sum_cols].sum().reset_index()
+    per_date['_league'] = 'MLB'
+
+    rolled = _rolling_sum(per_date, entity_col='_league', cols=sum_cols, window=window)
+    rolled = rolled.assign(
+        pa_strikeout_rate=lambda x: x['pa_strikeout_n'] / x['pa_total'].replace(0, np.nan),
+        pa_walk_rate=lambda x: x['pa_walk_n'] / x['pa_total'].replace(0, np.nan),
+        pa_hbp_rate=lambda x: x['pa_hbp_n'] / x['pa_total'].replace(0, np.nan),
+        pa_single_rate=lambda x: x['pa_single_n'] / x['pa_total'].replace(0, np.nan),
+        pa_xbh_rate=lambda x: x['pa_xbh_n'] / x['pa_total'].replace(0, np.nan),
+        pa_hr_rate=lambda x: x['pa_hr_n'] / x['pa_total'].replace(0, np.nan),
+    )
+
+    key_cols = ['game_season', 'game_date']
+    final_cols = sum_cols + ['pa_strikeout_rate', 'pa_walk_rate', 'pa_hbp_rate',
+                              'pa_single_rate', 'pa_xbh_rate', 'pa_hr_rate']
+    rolled = rolled[key_cols + final_cols]
+
+    return _prefix_stat_cols(rolled, prefix=_rolling_prefix('league', window), key_cols=key_cols)
+
+
+def build_league_batter_rolling_stats(batter_boxscore: pd.DataFrame, window: str | int) -> pd.DataFrame:
+    """Rolling equivalent of build_batter_rolling_stats's slash-line
+    categories (BA/SLG/OBP/ISO/BABIP), pooled across every batter in the
+    league instead of one player -- same date-grain pooling mechanism as
+    build_league_pa_outcome_rolling_feats above, from box-score data instead
+    of pbp."""
+    _validate_window(window)
+
+    stat_cols = ['h', 'k', 'bb', 'hr', 'ab', 'plate_appearances', 'total_bases_from_h']
+    per_date = (
+        batter_boxscore[['game_date', 'game_season'] + stat_cols]
+        .groupby(['game_season', 'game_date'])[stat_cols].sum().reset_index()
+    )
+    per_date['_league'] = 'MLB'
+
+    rolled = _rolling_sum(per_date, entity_col='_league', cols=stat_cols, window=window)
+    rolled = (
+        rolled
+        .assign(
+            ba=lambda x: x['h'] / x['ab'].replace(0, np.nan),
+            slg=lambda x: x['total_bases_from_h'] / x['ab'].replace(0, np.nan),
+            obp=lambda x: (x['h'] + x['bb']) / (x['ab'] + x['bb']).replace(0, np.nan),
+        )
+        .assign(
+            iso=lambda x: x['slg'] - x['ba'],
+            babip=lambda x: (x['h'] - x['hr']) / (x['ab'] - x['k'] - x['hr']).replace(0, np.nan),
+        )
+    )
+
+    key_cols = ['game_season', 'game_date']
+    final_cols = stat_cols + ['ba', 'slg', 'obp', 'iso', 'babip']
+    rolled = rolled[key_cols + final_cols]
+
+    return _prefix_stat_cols(rolled, prefix=_rolling_prefix('league', window), key_cols=key_cols)

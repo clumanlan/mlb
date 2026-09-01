@@ -125,6 +125,89 @@ def build_trend_features(df: pd.DataFrame, pairs: list[tuple[str, str]]) -> pd.D
     return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
+def _parse_rolling_col(col: str) -> tuple[str, str, str] | None:
+    """Like _entity_and_stat, but keeps the window bucket ('season' or
+    'last{N}g') instead of discarding it -- player-vs-league pairing needs
+    an EXACT window match, unlike trend-pairing above which spans windows
+    on purpose (short window vs. season baseline)."""
+    m = _SHORT_RE.match(col)
+    if m:
+        return m.group('prefix'), f"last{m.group('window')}g", m.group('stat')
+    m = _SEASON_RE.match(col)
+    if m:
+        return m.group('prefix'), 'season', m.group('stat')
+    return None
+
+
+def find_player_vs_league_pairs(columns: list[str]) -> list[tuple[str, str]]:
+    """Pair every non-league rolling column with the league_roll_{window}_{stat}
+    column sharing its exact window bucket and stat name (e.g.
+    batter_roll_season_pa_strikeout_rate <-> league_roll_season_pa_strikeout_rate),
+    regardless of the player-side entity prefix (batter/pitcher/opp_team/
+    pitching_team/anything). A league_roll_* column never appears as the
+    player side of a pair.
+
+    Returns (player_col, league_col) tuples, sorted for determinism. Sample-
+    size denominator columns (_SAMPLE_SIZE_SUFFIXES: plate_appearances,
+    pa_total, ab, ip, n_pitches) are excluded on both sides -- these are raw
+    COUNTS, not rates, so a player's own count divided by the league's
+    cumulative count is not a meaningful ratio (caught via a real degenerate
+    run: pitcher_vs_league_ratio_season_pa_total came back with mean 0.0037
+    and a constant direction of -1.0).
+    """
+    league_lookup = {}
+    for col in columns:
+        parsed = _parse_rolling_col(col)
+        if parsed is None:
+            continue
+        entity, window, stat = parsed
+        if entity == 'league' and stat not in _SAMPLE_SIZE_SUFFIXES:
+            league_lookup[(window, stat)] = col
+
+    pairs = []
+    for col in columns:
+        parsed = _parse_rolling_col(col)
+        if parsed is None:
+            continue
+        entity, window, stat = parsed
+        if entity == 'league' or stat in _SAMPLE_SIZE_SUFFIXES:
+            continue
+        league_col = league_lookup.get((window, stat))
+        if league_col:
+            pairs.append((col, league_col))
+
+    return sorted(pairs)
+
+
+def build_player_vs_league_features(df: pd.DataFrame, pairs: list[tuple[str, str]]) -> pd.DataFrame:
+    """Add two columns for every (player_col, league_col) pair (e.g. from
+    find_player_vs_league_pairs):
+      - {entity}_vs_league_ratio_{window}_{stat} = player / league: is this
+        player's rate above or below what the league is doing RIGHT NOW
+        (>1 above, <1 below, NaN-guarded against a zero league value) --
+        the sabermetric "+"-stat pattern (wRC+/ERA+ are literally
+        player-rate-over-league-rate, era-adjusted).
+      - {entity}_vs_league_direction_{window}_{stat} = sign(player - league):
+        a coarse +1/-1/0 above/below/equal indicator, magnitude discarded --
+        same rationale as build_trend_features's own direction column
+        (a plain difference is a linear combination of two already-present
+        raw columns a tree can reconstruct with one extra split; ratio and
+        direction are the non-linear/coarsened transforms that add real
+        information).
+    """
+    # Same fragmentation/OOM-risk reasoning as build_trend_features above —
+    # build every new column in a dict, concat once.
+    new_cols = {}
+    for player_col, league_col in pairs:
+        parsed = _parse_rolling_col(player_col)
+        if parsed is None:
+            continue
+        entity, window, stat = parsed
+        new_cols[f'{entity}_vs_league_ratio_{window}_{stat}'] = df[player_col] / df[league_col].replace(0, np.nan)
+        new_cols[f'{entity}_vs_league_direction_{window}_{stat}'] = np.sign(df[player_col] - df[league_col])
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
+
+
 def build_shrinkage_weight_features(
     df: pd.DataFrame, rate_to_sample_col: dict[str, str], k: float = 10.0
 ) -> pd.DataFrame:

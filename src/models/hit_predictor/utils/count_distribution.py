@@ -1,4 +1,7 @@
+import math
+
 import numpy as np
+from scipy.stats import nbinom
 
 
 def poisson_binomial_pmf(probabilities: list[float]) -> np.ndarray:
@@ -51,3 +54,26 @@ def poisson_binomial_mixture_pmf(probabilities: list[float], n_pmf: np.ndarray) 
         sub_pmf = poisson_binomial_pmf(probabilities[:n])
         mixture[: len(sub_pmf)] += weight * sub_pmf
     return mixture
+
+
+def negative_binomial_pmf(mean: float, alpha: float, max_k: int) -> np.ndarray:
+    """Exact NB2-parameterized negative binomial pmf array over k = 0..max_k,
+    for a predicted mean mu and fitted dispersion alpha where
+    variance = mu + alpha * mu^2 (statsmodels' NegativeBinomial NB2
+    convention). Converts to scipy.stats.nbinom's own (n, p) convention
+    (n = 1/alpha, p = n / (n + mean)) so nothing downstream needs to know or
+    care which pmf builder produced the array -- same drop-in contract as
+    poisson_binomial_pmf's output."""
+
+    n = 1.0 / alpha
+    p = n / (n + mean)
+    return nbinom.pmf(np.arange(max_k + 1), n, p)
+
+
+def prob_exceeds_line(pmf, line):
+    """P(total > line) from a total-count pmf (poisson_binomial_pmf's own
+    output, or any array indexed 0..N by count). DK totals lines are always
+    half-points (e.g. 5.5), so "exceeds" always means the next whole number
+    up -- floor(line) + 1 -- with no ties to worry about."""
+    threshold = math.floor(line) + 1
+    return float(sum(pmf[threshold:]))

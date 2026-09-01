@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from .rolling_stats import _rolling_sum, _rolling_prefix
+from .rolling_stats import _rolling_sum, _rolling_max, _rolling_pooled_std, _rolling_prefix
 from .season_stats import _prefix_stat_cols, _pitcher_role_lookup
 
 # Pre-game-knowable game-level context (venue, calendar, team form/rest,
@@ -136,6 +136,44 @@ def build_team_rest_days(schedule: pd.DataFrame) -> pd.DataFrame:
     df['team_days_since_last_game'] = df.groupby('team_id')['game_date'].diff().dt.days
 
     return df[TEAM_GAME_KEY_COLS + ['team_days_since_last_game']]
+
+
+def build_team_scoring_volatility(schedule: pd.DataFrame, window: str | int) -> pd.DataFrame:
+    """One row per (team_id, gamepk): mean/std/max of that team's per-game
+    runs scored, rolled forward — shift(1) so this game's own score never
+    leaks into its own pre-game read. Same window convention as
+    build_team_win_loss_record (window='season': expanding, resets each
+    year; window=<int>: trailing N-game).
+
+    Captures scoring EXPLOSIVENESS/volatility, not just level (see
+    build_team_win_loss_record's runs_scored, a rolling sum/level stat) —
+    a team that occasionally puts up a blowout can put a starter in
+    trouble even if its average is unremarkable.
+
+    Std is NaN with fewer than 2 prior games (sample std undefined at
+    n<=1). NOTE: _rolling_pooled_std orders by game_date, not
+    game_datetime, unlike build_team_win_loss_record/build_team_rest_days
+    — a pre-existing limitation shared by every other _rolling_pooled_std
+    caller in this file, not something this function fixes.
+    """
+    per_game = _team_game_long(schedule)
+    per_game['team_score_sumsq'] = per_game['team_score'] ** 2
+
+    std_df = _rolling_pooled_std(
+        per_game, entity_col='team_id', n_col='games_n', sum_col='team_score',
+        sumsq_col='team_score_sumsq', window=window, out_col='runs_scored_std',
+    )
+    std_df['runs_scored_mean'] = std_df['team_score'] / std_df['games_n'].replace(0, np.nan)
+
+    max_df = _rolling_max(
+        per_game, entity_col='team_id', cols=['team_score'], window=window, sort_col='game_datetime',
+    ).rename(columns={'team_score': 'runs_scored_max'})
+
+    rolled = std_df[TEAM_GAME_KEY_COLS + ['runs_scored_mean', 'runs_scored_std']].merge(
+        max_df[TEAM_GAME_KEY_COLS + ['runs_scored_max']], on=TEAM_GAME_KEY_COLS,
+    )
+
+    return _prefix_stat_cols(rolled, prefix=_rolling_prefix('team', window), key_cols=TEAM_GAME_KEY_COLS)
 
 
 # --------------------------- PROBABLE STARTER JOIN --------------------------- #
@@ -419,6 +457,45 @@ def build_expected_batters_faced(
     df['expected_batters_faced'] = (1 - weight) * baseline + weight * this_season_avg_safe
 
     return df
+
+
+def build_pitcher_anomaly_count_this_season(
+    start_df: pd.DataFrame, anomaly_threshold: float = 0.6, min_weight: float = 0.3,
+) -> pd.DataFrame:
+    """One row per (personId, gamepk) SP start: pitcher_anomaly_count_this_season
+    — a point-in-time-safe cumulative count of this pitcher's STRICTLY PRIOR
+    starts this season where realized_batters_faced came in well under the
+    pre-game expected_batters_faced (batters_faced_predictor's residual
+    analysis found established starters getting pulled after 0-2 clean
+    innings, with no shared pre-game-knowable trigger — rest days, weather,
+    day-of-week, and opponent quality were all checked and ruled out — so
+    this tracks THAT a pitcher has already shown the pattern this season,
+    not WHY, as a base-rate/recency signal).
+
+    A start is "anomalous" if realized_batters_faced < anomaly_threshold *
+    expected_batters_faced AND expected_batters_faced_weight >= min_weight —
+    the weight gate keeps a cold-start pitcher's still-unreliable cascade
+    estimate (already a separate, closed problem — see
+    batters_faced_predictor's v3) from being spuriously flagged as anomalous.
+
+    Requires personId, gamepk, game_season, game_date, realized_batters_faced,
+    expected_batters_faced, expected_batters_faced_weight already merged onto
+    start_df (batters_faced_predictor's own create_start_pa_outcome + the
+    expected_pa frame from build_expected_batters_faced, composed by the
+    caller — not recomputed here).
+    """
+    df = start_df.sort_values(['personId', 'game_season', 'game_date']).copy()
+
+    is_anomalous = (
+        (df['realized_batters_faced'] < anomaly_threshold * df['expected_batters_faced'])
+        & (df['expected_batters_faced_weight'] >= min_weight)
+    ).astype(float)
+
+    df['pitcher_anomaly_count_this_season'] = (
+        is_anomalous.groupby([df['personId'], df['game_season']]).transform(lambda s: s.shift(1).fillna(0).cumsum())
+    )
+
+    return df[['personId', 'gamepk', 'pitcher_anomaly_count_this_season']]
 
 
 # --------------------------- LONG EXPANSION (Epic E, replaces expected_role.py) --------------------------- #

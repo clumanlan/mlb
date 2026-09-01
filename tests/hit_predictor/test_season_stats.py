@@ -18,6 +18,7 @@ from models.hit_predictor.processing.features.season_stats import (
     _create_pitcher_start_depth_stats,
     _create_pitcher_start_ip_stats,
     _create_pitcher_start_pa_stats,
+    _create_pitcher_stuff_command_stats,
     _pivot_by_hand,
     _shift_to_last_season,
     build_batter_stats,
@@ -87,6 +88,42 @@ def _make_arsenal_pbp():
          'release_pos_x': 1.2, 'release_pos_y': 5.0, 'release_pos_z': 6.0,
          'plate_x': -0.3, 'plate_z_normalized': 0.0},
     ])
+
+
+def _make_command_csw_pbp():
+    """2 pitches for pitcher '1' in 2023: one called strike, one swinging
+    strike, everything else held constant/irrelevant — called_strike_rate
+    and swinging_strike_rate should each be 0.5, so csw_rate must be 1.0."""
+
+    base = {
+        'pitcher_id': '1', 'game_season': 2023,
+        'start_speed': 90.0, 'end_speed': 85.0, 'perceived_velo': 92.0, 'spin_rate': 2200.0,
+        'movement_magnitude': 10.0, 'pfx_z': 5.0, 'extension': 6.0, 'speed_retention': 0.94,
+        'is_in_play': False, 'plate_x': 0.0, 'plate_z_normalized': 0.5, 'zone': 5,
+        'is_ball': False, 'is_strike': True, 'is_chase': False, 'is_zone_swing': False,
+        'is_first_pitch': False,
+    }
+    return pd.DataFrame([
+        {**base, 'is_called_strike': True, 'is_swinging_strike': False},
+        {**base, 'is_called_strike': False, 'is_swinging_strike': True},
+    ])
+
+
+def test_create_pitcher_stuff_command_stats_csw_rate_equals_called_strike_plus_swinging_strike():
+    """command_csw_rate (CSW%) = called-strike rate + swinging-strike rate.
+    A residual-correlation screen confirmed this composite carries real
+    signal beyond either component alone (see ROADMAP.md's k_predictor v11
+    entry) — the called-strike rate on its own is weak, the sum is not."""
+
+    result = _create_pitcher_stuff_command_stats(_make_command_csw_pbp())
+
+    row = result.iloc[0]
+    assert row['pitcher_season_command_called_strike_rate'] == pytest.approx(0.5)
+    assert row['pitcher_season_command_swinging_strike_rate'] == pytest.approx(0.5)
+    assert row['pitcher_season_command_csw_rate'] == pytest.approx(1.0)
+    assert row['pitcher_season_command_csw_rate'] == pytest.approx(
+        row['pitcher_season_command_called_strike_rate'] + row['pitcher_season_command_swinging_strike_rate']
+    )
 
 
 def test_create_pitcher_arsenal_stats_release_pos_std_reflects_variance_across_all_pitches():
@@ -305,6 +342,22 @@ def test_build_batter_stats_computes_rate_stats_correctly():
     assert row['batter_last_season_slg'] == 0.7
     assert row['batter_last_season_iso'] == 0.4
     assert row['batter_last_season_babip'] == 0.29
+    # obp = (h+bb)/(ab+bb) = (3+1)/(10+1) = 0.36
+    assert row['batter_last_season_obp'] == pytest.approx(round(4 / 11, 2))
+
+
+def test_build_batter_stats_obp_is_nan_on_zero_denominator():
+    """A batter with AB=0 and BB=0 (e.g. hit-by-pitch-only appearance) has a
+    zero OBP denominator (ab+bb) — must be NaN, not a ZeroDivisionError."""
+
+    batter_boxscore = pd.DataFrame([_make_batter_boxscore_row(
+        personId='4', ab=0, h=0, k=0, bb=0, hr=0, plate_appearances=0, total_bases_from_h=0,
+    )])
+
+    result = build_batter_stats(batter_boxscore)
+
+    row = result.iloc[0]
+    assert np.isnan(row['batter_last_season_obp'])
 
 
 def test_create_batter_pa_outcome_stats_returns_batter_id_and_game_season_as_columns():
@@ -1034,6 +1087,18 @@ def test_build_pbp_pitcher_feats_all_roles_tags_and_stacks_both_roles():
     assert sp_row['pitcher_last_season_pa_hit_rate'] == 0.5
     # bullpen: 1 PA (Walk), not a hit = 0.0 — must not be contaminated by the SP PAs
     assert bullpen_row['pitcher_last_season_pa_hit_rate'] == 0.0
+
+
+def test_build_pbp_pitcher_feats_all_roles_includes_last_season_csw_rate():
+    """command_csw_rate must flow through build_pbp_pitcher_feats_all_roles
+    with no explicit column list of its own, and _shift_to_last_season's
+    'season_' -> 'last_season_' string replace must rename it correctly — a
+    regression guard against a future column-list change silently dropping
+    it, or the shift renaming missing this particular column name."""
+
+    result = build_pbp_pitcher_feats_all_roles(_make_full_pitcher_pbp())
+
+    assert 'pitcher_last_season_command_csw_rate' in result.columns
 
 
 def test_build_pbp_pitcher_feats_by_batter_hand_merges_all_substats():

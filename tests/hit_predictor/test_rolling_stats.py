@@ -8,6 +8,8 @@ from models.hit_predictor.processing.features.rolling_stats import (
     _rolling_pooled_std,
     _finalize_rates,
     _validate_window,
+    _pitcher_pa_outcome_per_game,
+    _batter_pa_outcome_per_game,
     build_batter_rolling_stats,
     build_pitcher_rolling_stats,
     build_pitcher_rolling_stats_all_roles,
@@ -16,6 +18,11 @@ from models.hit_predictor.processing.features.rolling_stats import (
     build_pbp_batter_rolling_feats,
     build_team_batter_strikeout_rolling_feats,
     build_team_batter_onbase_rolling_feats,
+    build_team_strikeout_volatility,
+    build_pitcher_fastball_rolling_feats,
+    build_pitcher_fastball_rolling_feats_all_roles,
+    build_league_pa_outcome_rolling_feats,
+    build_league_batter_rolling_stats,
 )
 
 
@@ -305,6 +312,22 @@ def test_build_batter_rolling_stats_iso_and_babip_from_rolled_sums():
     assert row2['batter_roll_last10g_babip'].iloc[0] == pytest.approx(0.5)
 
 
+def test_build_batter_rolling_stats_obp_from_rolled_sums():
+    """obp = (h+bb)/(ab+bb), computed from rolled component sums — same
+    'roll sums, divide once' rule as ba/slg/iso/babip in this function."""
+
+    df = pd.DataFrame([
+        _batter_box_row(gamepk='g1', game_date='2023-04-01', h=2, bb=1, ab=4),
+        _batter_box_row(gamepk='g2', game_date='2023-04-02'),
+    ])
+
+    result = build_batter_rolling_stats(df, window=10)
+
+    row2 = result.loc[result['gamepk'] == 'g2']
+    # rolled: h=2, bb=1, ab=4 -> obp = (2+1)/(4+1) = 0.6
+    assert row2['batter_roll_last10g_obp'].iloc[0] == pytest.approx(0.6)
+
+
 def test_build_batter_rolling_stats_season_mode_uses_roll_season_prefix():
     """window='season' must produce batter_roll_season_* columns, distinct
     from both season_stats.py's batter_season_*/_last_season_* columns and
@@ -488,6 +511,84 @@ def test_build_pbp_pitcher_rolling_feats_boolean_rate_uses_rolled_pitch_counts()
     assert row3['pitcher_roll_last10g_command_zone_rate'].iloc[0] == pytest.approx(2 / 3)
 
 
+def test_build_pbp_pitcher_rolling_feats_csw_rate_equals_called_strike_plus_swinging_strike():
+    """command_csw_rate (CSW%) = called-strike rate + swinging-strike rate,
+    both already-rolled boolean pitch rates. A residual-correlation screen
+    confirmed this composite carries real signal beyond either component
+    alone (see ROADMAP.md's k_predictor v11 entry) — the called-strike rate
+    on its own is weak, the sum is not. Game 1 has one called strike and one
+    swinging strike among 2 pitches; game 2 is a single non-strike pitch.
+    Rolled into game 3: called_strike_rate = 1/3, swinging_strike_rate = 1/3,
+    so csw_rate must equal 2/3 — not just independently correct, but exactly
+    the sum of the two components already under test elsewhere in this file."""
+
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                   is_called_strike=True, is_swinging_strike=False, is_strike=True, is_ball=False),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2,
+                   is_called_strike=False, is_swinging_strike=True, is_strike=True, is_ball=False),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1,
+                   is_called_strike=False, is_swinging_strike=False, is_strike=False, is_ball=True),
+        _pitch_row(gamepk='g3', game_date='2023-04-03', play_id=1, pitch_number=1),
+    ])
+
+    result = build_pbp_pitcher_rolling_feats(df, window=10)
+
+    row3 = result.loc[result['gamepk'] == 'g3']
+    assert row3['pitcher_roll_last10g_command_called_strike_rate'].iloc[0] == pytest.approx(1 / 3)
+    assert row3['pitcher_roll_last10g_command_swinging_strike_rate'].iloc[0] == pytest.approx(1 / 3)
+    assert row3['pitcher_roll_last10g_command_csw_rate'].iloc[0] == pytest.approx(2 / 3)
+    assert row3['pitcher_roll_last10g_command_csw_rate'].iloc[0] == pytest.approx(
+        row3['pitcher_roll_last10g_command_called_strike_rate'].iloc[0]
+        + row3['pitcher_roll_last10g_command_swinging_strike_rate'].iloc[0]
+    )
+
+
+def test_pitcher_pa_outcome_per_game_counts_two_strike_reached_and_two_strike_strikeout():
+    """Three PAs in one game: (a) never reaches 2 strikes (ends on a
+    ball-in-play with only 1 strike ever recorded), (b) reaches 2 strikes
+    via a foul, then ends in a strikeout, (c) reaches 2 strikes via a foul,
+    then ends in a groundout (not a strikeout). "Reached 2 strikes" must be
+    the MAX count_strikes seen across the whole PA, not just the final
+    pitch's count -- a foul-off at 2 strikes keeps count_strikes at 2 on
+    every subsequent pitch, so checking only the last pitch would still work
+    here, but checking the max is what correctly distinguishes PA (a), which
+    never shows count_strikes >= 2 on ANY pitch, from a PA that reached 2
+    strikes early and then, hypothetically, saw its last recorded pitch at a
+    lower count. pa_two_strike_reached_n counts (b) and (c); only (b) is a
+    strikeout, so pa_two_strike_strikeout_n counts just that one PA."""
+
+    df = pd.DataFrame([
+        # PA (a): never reaches 2 strikes
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                    count_strikes=0, play_result='Ball'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2,
+                    count_strikes=1, is_in_play=True, play_result='Groundout'),
+        # PA (b): reaches 2 strikes via a foul, then strikeout
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=1,
+                    count_strikes=0, play_result='Ball'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=2,
+                    count_strikes=1, play_result='Foul'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=3,
+                    count_strikes=2, play_result='Foul'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=4,
+                    count_strikes=2, play_result='Strikeout'),
+        # PA (c): reaches 2 strikes via a foul, then groundout (not a strikeout)
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=3, pitch_number=1,
+                    count_strikes=1, play_result='Ball'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=3, pitch_number=2,
+                    count_strikes=2, play_result='Foul'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=3, pitch_number=3,
+                    count_strikes=2, is_in_play=True, play_result='Groundout'),
+    ])
+
+    result = _pitcher_pa_outcome_per_game(df)
+    row = result.loc[result['gamepk'] == 'g1'].iloc[0]
+
+    assert row['pa_two_strike_reached_n'] == 2
+    assert row['pa_two_strike_strikeout_n'] == 1
+
+
 def test_build_pbp_pitcher_rolling_feats_pa_outcome_uses_last_pitch_of_pa_and_rolled_totals():
     """Game 1: PA1 ends in a strikeout on its 2nd (final) pitch — the
     opening ball on pitch 1 must not be counted as its own PA outcome.
@@ -517,6 +618,35 @@ def test_build_pbp_pitcher_rolling_feats_pa_outcome_uses_last_pitch_of_pa_and_ro
 
     row3 = result.loc[result['gamepk'] == 'g3']
     assert row3['pitcher_roll_last10g_pa_strikeout_rate'].iloc[0] == pytest.approx(1 / 3)
+
+
+def test_build_pbp_pitcher_rolling_feats_two_strike_reach_and_put_away_rate():
+    """Game 1 has 3 PAs: 1 never reaches 2 strikes, 2 do (one strikeout, one
+    groundout) -- same shape as
+    test_pitcher_pa_outcome_per_game_counts_two_strike_reached_and_two_strike_strikeout.
+    Rolled into game 2: reach rate = 2 PAs-reaching-2-strikes / 3 total PAs,
+    put-away rate = 1 strikeout / 2 PAs-that-reached-2-strikes -- a rate of a
+    rate, not a plain PA-outcome rate, so it must divide the ROLLED
+    two-strike-reached count, not pa_total."""
+
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                    count_strikes=1, is_in_play=True, play_result='Groundout'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=1,
+                    count_strikes=2, play_result='Strikeout'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=3, pitch_number=1,
+                    count_strikes=2, is_in_play=True, play_result='Groundout'),
+        # game 2 — the row under test
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1,
+                    play_result='Single'),
+    ])
+
+    result = build_pbp_pitcher_rolling_feats(df, window=10)
+
+    row2 = result.loc[result['gamepk'] == 'g2']
+    assert row2['pitcher_roll_last10g_pa_two_strike_reach_rate'].iloc[0] == pytest.approx(2 / 3)
+    assert row2['pitcher_roll_last10g_pa_put_away_rate'].iloc[0] == pytest.approx(1 / 2)
+    assert row2['pitcher_roll_last10g_pa_two_strike_reached_n'].iloc[0] == 2
 
 
 def test_build_pbp_pitcher_rolling_feats_last_inning_rolls_per_game_single_events():
@@ -750,6 +880,23 @@ def test_build_pbp_pitcher_rolling_feats_all_roles_tags_and_stacks_both_roles():
     assert bullpen_row['pitcher_roll_last10g_stuff_start_speed_mean'] == pytest.approx(80.0)
 
 
+def test_build_pbp_pitcher_rolling_feats_all_roles_includes_csw_rate():
+    """The all_roles wrapper stacks both role variants with no explicit
+    column list of its own — command_csw_rate must flow through
+    automatically once build_pbp_pitcher_rolling_feats exposes it. A
+    regression guard against a future column-list change silently dropping
+    it here."""
+
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', pitcher_role='sp'),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', pitcher_role='bullpen'),
+    ])
+
+    result = build_pbp_pitcher_rolling_feats_all_roles(df, window=10)
+
+    assert 'pitcher_roll_last10g_command_csw_rate' in result.columns
+
+
 def test_build_pbp_pitcher_rolling_feats_pa_pitch_count_mean_uses_rolled_totals():
     """season_stats.py's PA-outcome category also tracks pitch_count_mean/std
     (pitches per PA) alongside the outcome rates. Game 1: PA1 takes 3
@@ -853,6 +1000,66 @@ def _batter_pitch_row(batter_id='1', gamepk='g1', game_date='2023-04-01', game_s
     }
     row.update(overrides)
     return row
+
+
+def test_batter_pa_outcome_per_game_counts_two_strike_reached_and_two_strike_strikeout():
+    """Batter-side mirror of
+    test_pitcher_pa_outcome_per_game_counts_two_strike_reached_and_two_strike_strikeout —
+    same three-PA shape, same expected counts."""
+
+    df = pd.DataFrame([
+        # PA (a): never reaches 2 strikes
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                           count_strikes=0, play_result='Ball'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2,
+                           count_strikes=1, is_in_play=True, play_result='Groundout'),
+        # PA (b): reaches 2 strikes via a foul, then strikeout
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=1,
+                           count_strikes=0, play_result='Ball'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=2,
+                           count_strikes=1, play_result='Foul'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=3,
+                           count_strikes=2, play_result='Foul'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=4,
+                           count_strikes=2, play_result='Strikeout'),
+        # PA (c): reaches 2 strikes via a foul, then groundout (not a strikeout)
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=3, pitch_number=1,
+                           count_strikes=1, play_result='Ball'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=3, pitch_number=2,
+                           count_strikes=2, play_result='Foul'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=3, pitch_number=3,
+                           count_strikes=2, is_in_play=True, play_result='Groundout'),
+    ])
+
+    result = _batter_pa_outcome_per_game(df)
+    row = result.loc[result['gamepk'] == 'g1'].iloc[0]
+
+    assert row['pa_two_strike_reached_n'] == 2
+    assert row['pa_two_strike_strikeout_n'] == 1
+
+
+def test_build_pbp_batter_rolling_feats_two_strike_reach_and_put_away_rate():
+    """Batter-side mirror of
+    test_build_pbp_pitcher_rolling_feats_two_strike_reach_and_put_away_rate."""
+
+    df = pd.DataFrame([
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                           count_strikes=1, is_in_play=True, play_result='Groundout'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=1,
+                           count_strikes=2, play_result='Strikeout'),
+        _batter_pitch_row(gamepk='g1', game_date='2023-04-01', play_id=3, pitch_number=1,
+                           count_strikes=2, is_in_play=True, play_result='Groundout'),
+        # game 2 — the row under test
+        _batter_pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1,
+                           play_result='Single'),
+    ])
+
+    result = build_pbp_batter_rolling_feats(df, window=10)
+
+    row2 = result.loc[result['gamepk'] == 'g2']
+    assert row2['batter_roll_last10g_pa_two_strike_reach_rate'].iloc[0] == pytest.approx(2 / 3)
+    assert row2['batter_roll_last10g_pa_put_away_rate'].iloc[0] == pytest.approx(1 / 2)
+    assert row2['batter_roll_last10g_pa_two_strike_reached_n'].iloc[0] == 2
 
 
 def test_build_pbp_batter_rolling_feats_pa_outcome_and_pitch_count_from_rolled_totals():
@@ -1114,6 +1321,118 @@ def test_build_pbp_batter_rolling_feats_column_names_no_collision_with_season_st
     assert 'batter_last_season_pa_strikeout_rate' not in result_short.columns
 
 
+# --------------------- PITCHER FASTBALL-ONLY STUFF + PITCH MIX (k_predictor v4) ------- #
+# build_pbp_pitcher_rolling_feats's own stuff_start_speed_mean/stuff_spin_rate_mean
+# pool EVERY pitch type a pitcher threw that game -- a mix shift (more sliders,
+# fewer fastballs) can move that pooled average with zero real change in how hard
+# the pitcher is actually throwing, since a fastball (~93-97mph) and a breaking/
+# offspeed pitch (~78-88mph) start from very different baselines. These functions
+# isolate the fastball-only velocity/spin level, plus the pitch-mix level and
+# volatility, so a "velocity decline" feature isn't secretly a "he mixed in more
+# sliders" feature.
+
+def test_build_pitcher_fastball_rolling_feats_speed_uses_fastball_pitches_only():
+    """g1 has one 95mph Four-Seam Fastball and one 85mph Slider. Naive
+    pooling (like stuff_start_speed_mean) would average to 90.0; the
+    fastball-only mean must be 95.0, excluding the slider entirely."""
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1,
+                    pitch_type='Four-Seam Fastball', start_speed=95.0),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2,
+                    pitch_type='Slider', start_speed=85.0),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1,
+                    pitch_type='Four-Seam Fastball', start_speed=94.0),
+    ])
+
+    result = build_pitcher_fastball_rolling_feats(df, window=10)
+
+    row2 = result.loc[result['gamepk'] == 'g2'].iloc[0]
+    assert row2['pitcher_roll_last10g_fastball_start_speed_mean'] == pytest.approx(95.0)
+
+
+def test_build_pitcher_fastball_rolling_feats_pitch_rate_divides_rolled_sums_not_per_game_avg():
+    """g1: 4 pitches, 1 fastball -> rate 0.25. g2: 2 pitches, 2 fastball ->
+    rate 1.0. Rolled into g3: (1+2)/(4+2)=0.5 -- NOT the naive per-game
+    average of (0.25+1.0)/2=0.625 -- same rolled-sums rule as every other
+    rate in this file."""
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1, pitch_type='Four-Seam Fastball'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2, pitch_type='Slider'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=1, pitch_type='Curveball'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=2, pitch_type='Changeup'),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1, pitch_type='Four-Seam Fastball'),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=2, pitch_type='Sinker'),
+        _pitch_row(gamepk='g3', game_date='2023-04-03', play_id=1, pitch_number=1, pitch_type='Four-Seam Fastball'),
+    ])
+
+    result = build_pitcher_fastball_rolling_feats(df, window=10)
+
+    row3 = result.loc[result['gamepk'] == 'g3'].iloc[0]
+    assert row3['pitcher_roll_last10g_fastball_pitch_rate'] == pytest.approx(0.5)
+
+
+def test_build_pitcher_fastball_rolling_feats_zero_fastball_game_still_counts_toward_denominator():
+    """g1 is an all-breaking-ball game (0 fastballs of 3 pitches) -- it must
+    still contribute its 3 pitches to the rolled total-pitch denominator,
+    not be dropped or NaN-poison the rolling sum."""
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1, pitch_type='Slider'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2, pitch_type='Curveball'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=3, pitch_type='Changeup'),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1, pitch_type='Four-Seam Fastball'),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=2, pitch_type='Sinker'),
+        _pitch_row(gamepk='g3', game_date='2023-04-03', play_id=1, pitch_number=1, pitch_type='Four-Seam Fastball'),
+    ])
+
+    result = build_pitcher_fastball_rolling_feats(df, window=10)
+
+    row3 = result.loc[result['gamepk'] == 'g3'].iloc[0]
+    # rolled: fastball_n=0+2=2, pitch_n=3+2=5 -> 0.4
+    assert row3['pitcher_roll_last10g_fastball_pitch_rate'] == pytest.approx(0.4)
+
+
+def test_build_pitcher_fastball_rolling_feats_mix_volatility_mean_std_max():
+    """Fastball-rate volatility across games (not just the rolled level):
+    g1 rate=0.25 (1 of 4), g2 rate=1.0 (2 of 2). Rolled into g3 (uses g1,
+    g2 only): mean=(0.25+1.0)/2=0.625, sample std=sqrt(((0.25-0.625)^2+
+    (1.0-0.625)^2)/1), max=1.0."""
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=1, pitch_type='Four-Seam Fastball'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=1, pitch_number=2, pitch_type='Slider'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=1, pitch_type='Curveball'),
+        _pitch_row(gamepk='g1', game_date='2023-04-01', play_id=2, pitch_number=2, pitch_type='Changeup'),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=1, pitch_type='Four-Seam Fastball'),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', play_id=1, pitch_number=2, pitch_type='Sinker'),
+        _pitch_row(gamepk='g3', game_date='2023-04-03', play_id=1, pitch_number=1, pitch_type='Four-Seam Fastball'),
+    ])
+
+    result = build_pitcher_fastball_rolling_feats(df, window='season')
+
+    row3 = result.loc[result['gamepk'] == 'g3'].iloc[0]
+    assert row3['pitcher_roll_season_fastball_pitch_rate_std'] == pytest.approx(np.sqrt(((0.25 - 0.625) ** 2 + (1.0 - 0.625) ** 2) / 1))
+    assert row3['pitcher_roll_season_fastball_pitch_rate_max'] == pytest.approx(1.0)
+
+
+def test_build_pitcher_fastball_rolling_feats_all_roles_pools_bullpen_by_team():
+    """Mirrors build_pbp_pitcher_rolling_feats_all_roles' own bullpen-pooling
+    test: a swingman's sp-role and bullpen-role fastball stats must roll
+    forward separately, never blended."""
+    df = pd.DataFrame([
+        _pitch_row(gamepk='g1', game_date='2023-04-01', pitcher_role='bullpen',
+                    pitch_type='Four-Seam Fastball', start_speed=80.0),
+        _pitch_row(gamepk='g2', game_date='2023-04-02', pitcher_role='sp',
+                    pitch_type='Four-Seam Fastball', start_speed=95.0),
+        _pitch_row(gamepk='g3', game_date='2023-04-03', pitcher_role='sp',
+                    pitch_type='Four-Seam Fastball', start_speed=100.0),
+    ])
+
+    result = build_pitcher_fastball_rolling_feats_all_roles(df, window=10)
+
+    assert set(result['pitcher_role']) == {'sp', 'bullpen'}
+    sp_row = result[(result['gamepk'] == 'g3') & (result['pitcher_role'] == 'sp')].iloc[0]
+    assert sp_row['pitcher_roll_last10g_fastball_start_speed_mean'] == pytest.approx(95.0)
+
+
 # --------------------- TEAM-LEVEL BATTER STRIKEOUT ROLLING FEATS --------------------- #
 # k_predictor v2: opposing-lineup rolling K rate. Mirrors
 # build_pitcher_rolling_stats_all_roles' bullpen-pooling pattern (pool per-entity
@@ -1230,6 +1549,96 @@ def test_build_team_batter_strikeout_rolling_feats_rate_divides_rolled_sums_not_
     assert row_g3['team_roll_last10g_pa_strikeout_rate'] == pytest.approx(2 / 9)
 
 
+# --------------------------- TEAM-LEVEL STRIKEOUT-RATE VOLATILITY (k_predictor v3) --------------------------- #
+# Same lineup-pooling shape as build_team_batter_strikeout_rolling_feats above (a
+# team's per-game K rate, starting lineup only), but mirrors
+# game_context.build_team_scoring_volatility's mean/std/max-of-the-per-game-value
+# treatment instead of a rolled-sums rate -- captures a team's K-rate CEILING/
+# volatility, not just its level (build_team_batter_strikeout_rolling_feats's own
+# pa_strikeout_rate already covers level).
+
+def _team_game_rows(team_id, games):
+    """games: list of (gamepk, game_date, pa_total, k_n) for one team, one PA
+    row per plate appearance so build_team_strikeout_volatility's own lineup
+    pooling has real per-PA rows to sum."""
+    rows = []
+    for gamepk, game_date, pa_total, k_n in games:
+        for i in range(1, pa_total + 1):
+            rows.append(_batter_pitch_row(
+                batter_id='1', batter_team_id=team_id, gamepk=gamepk, game_date=game_date,
+                play_id=i, play_result='Strikeout' if i <= k_n else 'Single',
+                count_strikes=2 if i <= k_n else 0,
+            ))
+    return rows
+
+
+def _team_lineup_rows(games):
+    return [_lineup_slot_row(personId='1', gamepk=gamepk, batting_order=1) for gamepk, *_ in games]
+
+
+def test_build_team_strikeout_volatility_season_window_computes_mean_std_max():
+    """Team T1's per-game K rate: g1=1/4=0.25, g2=2/4=0.50, g3=4/4=1.0 (own
+    game, excluded). Rolled into g3 (uses g1, g2 only):
+    mean=(0.25+0.50)/2=0.375, sample std=sqrt(((0.25-0.375)^2+(0.50-0.375)^2)/1)
+    =sqrt(0.03125), max=0.50 -- not the current game's own 1.0."""
+    games = [('g1', '2023-04-01', 4, 1), ('g2', '2023-04-02', 4, 2), ('g3', '2023-04-03', 4, 4)]
+    pbp = pd.DataFrame(_team_game_rows('T1', games))
+    batter_boxscore = pd.DataFrame(_team_lineup_rows(games))
+
+    result = build_team_strikeout_volatility(pbp, batter_boxscore, window='season')
+
+    row_g3 = result.loc[result['gamepk'] == 'g3'].iloc[0]
+    assert row_g3['team_roll_season_pa_strikeout_rate_mean'] == pytest.approx(0.375)
+    assert row_g3['team_roll_season_pa_strikeout_rate_std'] == pytest.approx(np.sqrt(0.03125))
+    assert row_g3['team_roll_season_pa_strikeout_rate_max'] == pytest.approx(0.50)
+
+
+def test_build_team_strikeout_volatility_short_window_is_trailing_n_games():
+    """Team T1's per-game K rate: g1=1.0, g2=0.25, g3=0.75, g4=own game.
+    Rolled into g4 at window=2 uses only g2/g3 (mean=0.5, max=0.75) --
+    a different answer than season, which would also pull in g1's 1.0."""
+    games = [
+        ('g1', '2023-04-01', 4, 4), ('g2', '2023-04-02', 4, 1),
+        ('g3', '2023-04-03', 4, 3), ('g4', '2023-04-04', 4, 2),
+    ]
+    pbp = pd.DataFrame(_team_game_rows('T1', games))
+    batter_boxscore = pd.DataFrame(_team_lineup_rows(games))
+
+    result = build_team_strikeout_volatility(pbp, batter_boxscore, window=2)
+
+    row_g4 = result.loc[result['gamepk'] == 'g4'].iloc[0]
+    assert row_g4['team_roll_last2g_pa_strikeout_rate_mean'] == pytest.approx(0.5)
+    assert row_g4['team_roll_last2g_pa_strikeout_rate_max'] == pytest.approx(0.75)
+
+
+def test_build_team_strikeout_volatility_first_game_of_season_is_nan():
+    games = [('g1', '2023-04-01', 4, 1)]
+    pbp = pd.DataFrame(_team_game_rows('T1', games))
+    batter_boxscore = pd.DataFrame(_team_lineup_rows(games))
+
+    result = build_team_strikeout_volatility(pbp, batter_boxscore, window='season')
+
+    row_g1 = result.loc[result['gamepk'] == 'g1'].iloc[0]
+    assert pd.isna(row_g1['team_roll_season_pa_strikeout_rate_mean'])
+    assert pd.isna(row_g1['team_roll_season_pa_strikeout_rate_std'])
+    assert pd.isna(row_g1['team_roll_season_pa_strikeout_rate_max'])
+
+
+def test_build_team_strikeout_volatility_std_is_nan_with_only_one_prior_game():
+    """Sample std is undefined with fewer than 2 prior games -- mean and max
+    are still defined off that single prior game."""
+    games = [('g1', '2023-04-01', 4, 1), ('g2', '2023-04-02', 4, 3)]
+    pbp = pd.DataFrame(_team_game_rows('T1', games))
+    batter_boxscore = pd.DataFrame(_team_lineup_rows(games))
+
+    result = build_team_strikeout_volatility(pbp, batter_boxscore, window='season')
+
+    row_g2 = result.loc[result['gamepk'] == 'g2'].iloc[0]
+    assert row_g2['team_roll_season_pa_strikeout_rate_mean'] == pytest.approx(0.25)
+    assert row_g2['team_roll_season_pa_strikeout_rate_max'] == pytest.approx(0.25)
+    assert pd.isna(row_g2['team_roll_season_pa_strikeout_rate_std'])
+
+
 # --------------------------- OPPOSING LINEUP ON-BASE/WALK RATE (batters_faced_predictor) --------------------------- #
 # Mirrors build_team_batter_strikeout_rolling_feats above exactly (same pooling/
 # rolling/rate-from-sums shape), swapping pa_strikeout_n for pa_walk_n/pa_hit_n/
@@ -1308,3 +1717,187 @@ def test_build_team_batter_onbase_rolling_feats_rate_divides_rolled_sums_not_per
     # rolled: on_base_n=2+1=3, total PA=3+6=9 -> 3/9, NOT naive avg of (2/3, 1/6)
     assert row_g3['team_roll_last10g_on_base_rate'] == pytest.approx(3 / 9)
     assert row_g3['team_roll_last10g_walk_rate'] == pytest.approx(2 / 9)
+
+
+# --------------------- LEAGUE-WIDE PA-OUTCOME ROLLING FEATS --------------------- #
+# k_predictor v8: does the model know what season/era it's in? Rolling
+# equivalent of season_stats.build_league_pa_outcome_stats (a static
+# last-season snapshot) -- pooled across the ENTIRE league (every team, every
+# batter, no starting-lineup filter, unlike build_team_batter_strikeout_rolling_feats
+# above), keyed by (game_season, game_date) only since there's no single
+# per-game "entity" to roll league-wide the way one team/pitcher/batter has.
+
+def test_build_league_pa_outcome_rolling_feats_pools_across_entire_league():
+    """Two different teams' games on the SAME date must pool into a single
+    date-row, unlike build_team_batter_strikeout_rolling_feats's per-team
+    pooling -- this is the whole point of a league-wide (not team-wide) table."""
+
+    pbp = pd.DataFrame([
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g1',
+                           game_date='2023-04-01', play_id=1,
+                           play_result='Strikeout', count_strikes=2),
+        _batter_pitch_row(batter_id='2', batter_team_id='T2', gamepk='g2',
+                           game_date='2023-04-01', play_id=1,
+                           play_result='Single'),
+        _batter_pitch_row(batter_id='3', batter_team_id='T3', gamepk='g3',
+                           game_date='2023-04-02', play_id=1,
+                           play_result='Single'),
+    ])
+
+    result = build_league_pa_outcome_rolling_feats(pbp, window='season')
+
+    row = result.loc[result['game_date'] == pd.Timestamp('2023-04-02')].iloc[0]
+    assert row['league_roll_season_pa_total'] == 2
+    assert row['league_roll_season_pa_strikeout_n'] == 1
+
+
+def test_build_league_pa_outcome_rolling_feats_excludes_current_date():
+    """A date's own PAs must not leak into that same date's rolled read --
+    same point-in-time guarantee _rolling_sum provides elsewhere, verified
+    explicitly for this new date-grain pooling shape."""
+
+    pbp = pd.DataFrame([
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g1',
+                           game_date='2023-04-01', play_id=1, play_result='Single'),
+        _batter_pitch_row(batter_id='2', batter_team_id='T2', gamepk='g2',
+                           game_date='2023-04-02', play_id=1,
+                           play_result='Strikeout', count_strikes=2),
+    ])
+
+    result = build_league_pa_outcome_rolling_feats(pbp, window='season')
+
+    row = result.loc[result['game_date'] == pd.Timestamp('2023-04-02')].iloc[0]
+    assert row['league_roll_season_pa_total'] == 1
+    assert row['league_roll_season_pa_strikeout_n'] == 0
+
+
+def test_build_league_pa_outcome_rolling_feats_rate_divides_rolled_sums_not_per_date_avg():
+    """Rate must come from rolled numerator/denominator sums, not an average
+    of each date's own rate. The league's first date has zero rolled PA and
+    must produce NaN, not a ZeroDivisionError/inf."""
+
+    pbp_rows = [
+        # date1: 3 PA, 1 K -> rate 1/3
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g1', game_date='2023-04-01',
+                           play_id=1, play_result='Strikeout', count_strikes=2),
+        _batter_pitch_row(batter_id='2', batter_team_id='T1', gamepk='g1', game_date='2023-04-01',
+                           play_id=1, play_result='Single'),
+        _batter_pitch_row(batter_id='3', batter_team_id='T2', gamepk='g2', game_date='2023-04-01',
+                           play_id=1, play_result='Single'),
+        # date2: 1 PA, 1 K -> rate 1.0
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g3', game_date='2023-04-02',
+                           play_id=1, play_result='Strikeout', count_strikes=2),
+        # date3: probe row
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g4', game_date='2023-04-03',
+                           play_id=1, play_result='Single'),
+    ]
+    pbp = pd.DataFrame(pbp_rows)
+
+    result = build_league_pa_outcome_rolling_feats(pbp, window=10)
+
+    row_date1 = result.loc[result['game_date'] == pd.Timestamp('2023-04-01')].iloc[0]
+    assert pd.isna(row_date1['league_roll_last10g_pa_strikeout_rate'])
+
+    row_date3 = result.loc[result['game_date'] == pd.Timestamp('2023-04-03')].iloc[0]
+    # rolled: pa_total=3+1=4, strikeout_n=1+1=2 -> 0.5, NOT naive avg of (1/3, 1.0)
+    assert row_date3['league_roll_last10g_pa_strikeout_rate'] == pytest.approx(0.5)
+
+
+def test_build_league_pa_outcome_rolling_feats_season_mode_prefix_and_key_cols():
+    """window='season' -> league_roll_season_* columns; window=<int> ->
+    league_roll_last{N}g_* columns. Output must be keyed by (game_season,
+    game_date) ONLY -- no gamepk/team_id/batter_id, unlike every other
+    rolling table in this file."""
+
+    pbp = pd.DataFrame([
+        _batter_pitch_row(batter_id='1', batter_team_id='T1', gamepk='g1',
+                           game_date='2023-04-01', play_id=1, play_result='Single'),
+    ])
+
+    result_season = build_league_pa_outcome_rolling_feats(pbp, window='season')
+    result_short = build_league_pa_outcome_rolling_feats(pbp, window=10)
+
+    assert 'league_roll_season_pa_strikeout_rate' in result_season.columns
+    assert 'league_roll_last10g_pa_strikeout_rate' in result_short.columns
+
+    non_prefixed = {c for c in result_season.columns if not c.startswith('league_roll_')}
+    assert non_prefixed == {'game_season', 'game_date'}
+
+
+# --------------------- LEAGUE-WIDE BATTER RATE-STAT ROLLING STATS --------------------- #
+# k_predictor v8's slash-line half of the league-context signal -- rolling
+# equivalent of build_batter_rolling_stats (BA/SLG/OBP/ISO/BABIP), pooled
+# across every batter in the league instead of one player. Same date-grain
+# pooling mechanism as build_league_pa_outcome_rolling_feats above.
+
+def test_build_league_batter_rolling_stats_ba_from_rolled_sums_pools_all_batters():
+    """BA must come from rolled hit/AB sums pooled across every batter, not
+    an average of each batter's own rate -- date1 pools TWO different
+    batters' box lines into a single date-row."""
+
+    df = pd.DataFrame([
+        _batter_box_row(personId='1', gamepk='g1', game_date='2023-04-01', h=1, ab=1),
+        _batter_box_row(personId='2', gamepk='g2', game_date='2023-04-01', h=0, ab=4),
+        _batter_box_row(personId='3', gamepk='g3', game_date='2023-04-02', h=0, ab=1),
+    ])
+
+    result = build_league_batter_rolling_stats(df, window='season')
+
+    row = result.loc[result['game_date'] == pd.Timestamp('2023-04-02')].iloc[0]
+    # rolled: h=1+0=1, ab=1+4=5 -> 0.2, NOT naive avg of (1.0, 0.0)
+    assert row['league_roll_season_ba'] == pytest.approx(0.2)
+
+
+def test_build_league_batter_rolling_stats_iso_and_babip_from_rolled_sums():
+    """iso = slg - ba, babip = (h-hr)/(ab-k-hr) -- both composite formulas
+    computed from already-rolled component sums, mirroring
+    build_batter_rolling_stats exactly."""
+
+    df = pd.DataFrame([
+        _batter_box_row(personId='1', gamepk='g1', game_date='2023-04-01',
+                         h=2, k=1, hr=1, ab=4, total_bases_from_h=5),
+        _batter_box_row(personId='2', gamepk='g2', game_date='2023-04-02', ab=0),
+    ])
+
+    result = build_league_batter_rolling_stats(df, window='season')
+
+    row = result.loc[result['game_date'] == pd.Timestamp('2023-04-02')].iloc[0]
+    # ba = 2/4 = 0.5, slg = 5/4 = 1.25 -> iso = 0.75
+    assert row['league_roll_season_iso'] == pytest.approx(0.75)
+    # babip = (2-1)/(4-1-1) = 1/2 = 0.5
+    assert row['league_roll_season_babip'] == pytest.approx(0.5)
+
+
+def test_build_league_batter_rolling_stats_obp_from_rolled_sums():
+    """obp = (h+bb)/(ab+bb), computed from rolled component sums -- same
+    'roll sums, divide once' rule as ba/slg/iso/babip in this function."""
+
+    df = pd.DataFrame([
+        _batter_box_row(personId='1', gamepk='g1', game_date='2023-04-01', h=2, bb=1, ab=4),
+        _batter_box_row(personId='2', gamepk='g2', game_date='2023-04-02', ab=0),
+    ])
+
+    result = build_league_batter_rolling_stats(df, window='season')
+
+    row = result.loc[result['game_date'] == pd.Timestamp('2023-04-02')].iloc[0]
+    # obp = (2+1)/(4+1) = 0.6
+    assert row['league_roll_season_obp'] == pytest.approx(0.6)
+
+
+def test_build_league_batter_rolling_stats_season_mode_prefix_and_key_cols():
+    """window='season' -> league_roll_season_* columns; window=<int> ->
+    league_roll_last{N}g_* columns. Output must be keyed by (game_season,
+    game_date) ONLY -- no gamepk/personId, unlike build_batter_rolling_stats."""
+
+    df = pd.DataFrame([
+        _batter_box_row(personId='1', gamepk='g1', game_date='2023-04-01', h=1, ab=1),
+    ])
+
+    result_season = build_league_batter_rolling_stats(df, window='season')
+    result_short = build_league_batter_rolling_stats(df, window=10)
+
+    assert 'league_roll_season_ba' in result_season.columns
+    assert 'league_roll_last10g_ba' in result_short.columns
+
+    non_prefixed = {c for c in result_season.columns if not c.startswith('league_roll_')}
+    assert non_prefixed == {'game_season', 'game_date'}

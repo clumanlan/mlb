@@ -1,71 +1,205 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="luxury">
 <head>
-<meta charset="utf-8">
-<title>Odds Pipeline Fix — Turn Summary</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dashboard Styling &amp; Section 4</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 880px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; line-height: 1.55; }
-  h1 { font-size: 1.5rem; border-bottom: 2px solid #222; padding-bottom: 8px; }
-  h2 { font-size: 1.15rem; margin-top: 2rem; color: #111; }
-  .tag { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 4px; margin-right: 6px; }
-  .tag.fixed { background: #dcfce7; color: #166534; }
-  .tag.deployed { background: #dcfce7; color: #166534; }
-  .tag.pending { background: #fef9c3; color: #854d0e; }
-  .tag.rootcause { background: #dbeafe; color: #1e40af; }
-  .tag.bug { background: #fee2e2; color: #991b1b; }
-  code { background: #f2f2f2; padding: 1px 5px; border-radius: 3px; font-size: 0.9em; }
-  pre { background: #1e1e1e; color: #e6e6e6; padding: 14px; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
-  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #ddd; font-size: 0.9rem; vertical-align: top; }
-  th { background: #fafafa; }
-  ul { padding-left: 1.2rem; }
-  .note { background: #fafafa; border-left: 3px solid #999; padding: 8px 14px; font-size: 0.9rem; margin: 1rem 0; }
-  .timeline { border-left: 2px solid #ddd; padding-left: 16px; margin: 1rem 0; }
-  .timeline li { margin-bottom: 8px; font-size: 0.92rem; }
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex) > * { min-width: 0; }
+  :where(p, h1, h2, h3, h4, li, td, th, .badge) { overflow-wrap: anywhere; }
+  body { background: var(--color-base-100); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:999px; margin-right:6px; }
 </style>
 </head>
-<body>
+<body class="min-h-screen bg-base-100 text-base-content">
+<main class="mx-auto max-w-5xl px-6 py-10 lg:px-10 lg:py-14 space-y-10">
 
-<h1>daily_odds_fetch pipeline fix <span class="tag deployed">deployed</span></h1>
-<p>2026-08-26 &middot; TDD via <code>/impl-planning</code> skill &middot; 43/43 odds-suite tests passing, lint clean</p>
+  <section class="space-y-3">
+    <div class="badge badge-soft badge-primary">session summary</div>
+    <h1 class="text-3xl lg:text-4xl font-bold">Dashboard: Typography, Timestamps &amp; Section 4</h1>
+    <p class="text-base-content/70 max-w-3xl">
+      Three related requests since the last review: (1) restyle the dashboard using typography inspired by
+      a Pudding.cool article, landing on fonts pulled from the user's own portfolio-site brand; (2) surface
+      pipeline completion times, not just dates; (3) design and build a new "Starting Pitcher Predictions"
+      section, including a visual link back to Today's Slate. <strong>11 files touched, +390/&minus;12
+      lines</strong>, all inside <span class="mono">dashboard/</span>.
+    </p>
+    <div role="alert" class="alert alert-warning alert-soft max-w-3xl">
+      <span>Unrelated, not reviewed here: <span class="mono">src/models/batters_faced_predictor/experiments/residual_error_analysis_v2/</span> appeared mid-session &mdash; a different session's parallel work on this repo (same pattern as the earlier <span class="mono">project_odds_fetch_outage</span> discovery).</span>
+    </div>
+  </section>
 
-<h2>Timeline this session</h2>
-<ol class="timeline">
-<li><strong>Discovered</strong> &mdash; <code>daily_odds_fetch</code> silently 401ing since 2026-08-18, found via S3 status logs (<code>lambdas/status/daily_odds_fetch/*.json</code>)</li>
-<li><strong>Root-caused</strong> &mdash; not a bad key. Direct hit against <code>/v4/sports</code> returned <code>x-requests-used: 500, x-requests-remaining: 0</code>. Real account quota exhausted; our SSM counter only showed "15" because it incremented +1/invocation instead of tracking real API credit cost</li>
-<li><strong>Fixed quota tracking</strong> &mdash; SSM now stores the API's own <code>x-requests-used</code> value directly</li>
-<li><strong>Found a second bug while checking alerting</strong> &mdash; handler swallowed all exceptions and returned a 500 body instead of re-raising, which silently defeated the DLQ and CloudWatch <code>Errors</code> alarm for the entire 9-day outage</li>
-<li><strong>Fixed error handling</strong> &mdash; handler now re-raises after <code>write_status</code>, matching the other 3 Lambdas</li>
-<li><strong>Deployed</strong> both fixes via <code>make deploy-odds-fetch</code></li>
-<li><strong>Verified Terraform</strong> &mdash; DLQ, SNS topic + confirmed email subscription, both CloudWatch alarms already live, zero drift (CLAUDE.md's "pending apply" note was stale, fixed)</li>
-</ol>
+  <section class="space-y-3">
+    <h2 class="text-xl font-semibold">1. Typography</h2>
+    <p class="text-base-content/70 max-w-3xl">
+      User liked pudding.cool/2024/09/lineup/'s typography &mdash; fetched the page source and found it uses
+      <strong>Tiempos Text</strong> + <strong>National 2</strong>, both paid Klim Type Foundry fonts licensed
+      to The Pudding specifically. Declined to hotlink their font files. User then pointed at their own
+      portfolio-site (<span class="mono">~/projects/portfolio-site/src/styles/global.css</span>), which
+      already has a marker-font system: Inter (body), Space Mono (data), and three handwriting/marker
+      accents (Permanent Marker, Kalam, Sue Ellen Francisco &mdash; the last used for their site's nav
+      wordmark). Asked which marker font for the dashboard title; user picked <strong>Permanent Marker</strong>.
+    </p>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table table-zebra">
+        <thead><tr><th>Role</th><th>Before</th><th>After</th></tr></thead>
+        <tbody>
+          <tr><td>Body / labels</td><td class="mono">Inter</td><td class="mono">Inter <span class="badge badge-ghost badge-xs">unchanged</span></td></tr>
+          <tr><td>Data / mono values</td><td class="mono">JetBrains Mono</td><td class="mono">Space Mono</td></tr>
+          <tr><td>Page title</td><td class="mono">Inter, "MLB pre-game dashboard"</td><td class="mono">Permanent Marker, "MLB pre-game"</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-<h2>Root cause #1: quota tracking <span class="tag rootcause">confirmed</span></h2>
-<pre>x-requests-used: 500
-x-requests-remaining: 0</pre>
-<p>Failure pattern confirms gradual exhaustion: 2026-08-15 last full success &rarr; 2026-08-16 the expensive <code>player_props</code> call (4 markets/event) failed first while <code>team_odds</code> still worked &rarr; 2026-08-17 onward everything 401s.</p>
+  <section class="space-y-3">
+    <h2 class="text-xl font-semibold">2. Pipeline completion time</h2>
+    <p class="text-base-content/70 max-w-3xl">
+      Pipeline cards showed <span class="mono">run_date</span> and duration but not what time of day the
+      Lambda actually finished &mdash; the API already returns <span class="mono">completed_at</span>, just
+      wasn't rendered. Added <span class="mono">formatCompletedAt()</span> in <span class="mono">PipelineStatus.jsx</span>:
+      appends "Z" to the backend's naive-UTC timestamp so the browser parses it as UTC, then renders in the
+      viewer's local time zone. Cards now read <span class="mono">2026-08-25 &middot; 5:01 AM &middot; 55.9s</span>.
+    </p>
+  </section>
 
-<h2>Root cause #2: alerting never fired <span class="tag bug">bug</span></h2>
-<p>Both the DLQ (<code>dead_letter_config</code> on the Lambda) and the <code>odds_errors</code> CloudWatch alarm key off AWS Lambda's <em>native</em> <code>Errors</code> metric &mdash; which only increments on an actual unhandled exception, not a caught exception returned as a 500-shaped body. Confirmed live: the alarm sat at <code>OK</code> and the DLQ held 0 messages the entire 9-day outage.</p>
+  <section class="space-y-3">
+    <h2 class="text-xl font-semibold">3. Section 4 — Starting Pitcher Predictions</h2>
+    <p class="text-base-content/70 max-w-3xl">
+      Talked through placement first: predictions are per-<em>starting-pitcher</em> (two per game, three
+      numbers each) while Today's Slate is per-<em>game</em> &mdash; cramming both into one table cell
+      would've broken it. Landed on a dedicated section (not a tab &mdash; everything here is "today's
+      snapshot," a tab would earn its keep on genuinely separate content like historical performance).
+      None of the three candidate models have a production inference path yet, so this ships as an explicit
+      UI shell with sample data, real game linkage only.
+    </p>
+    <div class="stats stats-vertical sm:stats-horizontal shadow border border-base-content/10 w-full">
+      <div class="stat">
+        <div class="stat-title">Backend tests</div>
+        <div class="stat-value">54 <span class="text-base-content/40 text-lg">passing</span></div>
+        <div class="stat-desc">9 new, TDD'd (RED confirmed before each GREEN)</div>
+      </div>
+      <div class="stat">
+        <div class="stat-title">Game linkage</div>
+        <div class="stat-value text-success">15 / 15</div>
+        <div class="stat-desc">today's real game_pks match between both endpoints</div>
+      </div>
+      <div class="stat">
+        <div class="stat-title">Data status</div>
+        <div class="stat-value text-warning">sample</div>
+        <div class="stat-desc">numbers are fake; game/team plumbing is real</div>
+      </div>
+    </div>
 
-<h2>Files changed</h2>
-<table>
-<tr><th>File</th><th>Change</th></tr>
-<tr><td><code>src/data/modules/odds_fetch.py</code></td><td><code>get_last_usage()</code> added; <code>api_get()</code> captures real <code>x-requests-used</code> header</td></tr>
-<tr><td><code>src/data/modules/odds_quota.py</code></td><td><code>increment_monthly_usage()</code> (+1 guess) &rarr; <code>set_monthly_usage(year, month, used_count)</code> (writes real API count)</td></tr>
-<tr><td><code>src/lambdas/daily_odds_fetch/handler.py</code></td><td><code>fetch_and_store()</code> uses real usage, skips SSM write if unknown; <code>handler()</code> now <code>raise</code>s on failure instead of returning 500</td></tr>
-<tr><td><code>tests/test_odds_fetch.py</code>, <code>test_odds_quota.py</code>, <code>test_daily_odds_fetch_handler.py</code>, <code>test_integration_odds_fetch.py</code></td><td>RED/GREEN pairs for both fixes; moto end-to-end confirms real SSM value + raised exception</td></tr>
-<tr><td><code>CLAUDE.md</code></td><td>Doc updates: <code>set_monthly_usage</code>, re-raise pattern for all 4 Lambdas, Terraform resources marked live/confirmed, Known Issues entry for the fixed alerting bug</td></tr>
-</table>
+    <h3 class="text-base font-semibold mt-4">The click-to-link design (this turn's main build)</h3>
+    <p class="text-base-content/70 max-w-3xl">
+      User asked how to visually connect a Slate row to its pitchers. Recommended a hybrid over two other
+      options (accordion-in-place, or nothing) to keep both the "scan all of today's starters" view and a
+      concrete link:
+    </p>
+    <ul class="list-disc pl-6 text-sm text-base-content/80 space-y-1 max-w-3xl">
+      <li><strong>Shared color dot</strong> (<span class="mono">lib/gameColor.js</span>) &mdash; deterministic by <span class="mono">game_pk % 6</span>, using the user's own portfolio accent palette (petrol-teal, vangogh-navy, wheat-gold, olive, terracotta, cloud-grey) &mdash; not invented from scratch.</li>
+      <li><strong>Click a Slate row</strong> &mdash; scrolls to and pulses (green flash, 1.4s) that game's <span class="mono">&lt;tbody id="predictions-game-{game_pk}"&gt;</span> in Section 4. Plain DOM manipulation between sibling components, no global store introduced for a one-off visual nudge.</li>
+      <li><strong>Section 4 rows grouped per game</strong> (one <span class="mono">&lt;tbody&gt;</span> per game_pk) rather than a flat list &mdash; this is also what makes the scroll target addressable.</li>
+      <li>Added an italic <span class="mono">"predicted, not realized"</span> caption per the user's point that the numbers weren't clearly marked as predictions.</li>
+    </ul>
+    <div class="flex items-center gap-6 text-sm bg-base-200 rounded-box p-4 mt-2 max-w-3xl">
+      <div><span class="dot" style="background:#2E5C57"></span>petrol-teal</div>
+      <div><span class="dot" style="background:#28304F"></span>vangogh-navy</div>
+      <div><span class="dot" style="background:#A9863E"></span>wheat-gold</div>
+      <div><span class="dot" style="background:#5B6B3E"></span>olive</div>
+      <div><span class="dot" style="background:#B66C53"></span>terracotta</div>
+      <div><span class="dot" style="background:#8A97A6"></span>cloud-grey</div>
+    </div>
+  </section>
 
-<h2>Still open</h2>
-<ul>
-<li><strong>Real account quota is still 0/500</strong> &mdash; resets ~2026-09-01. Decision made: wait, no plan upgrade for now</li>
-<li><strong>Backfill</strong> needed for 2026-08-18 &rarr; 2026-08-26 once quota's available</li>
-<li><strong>Live verification blocked</strong> &mdash; a manual <code>aws lambda invoke</code> to watch the alarm trip in real time was blocked by the permission classifier. Either run it manually, or tomorrow's 10 AM UTC scheduled run will exercise the same failure path (still no quota) and should produce a real SNS email this time</li>
-</ul>
+  <section class="space-y-3">
+    <h2 class="text-xl font-semibold">File-by-file</h2>
+    <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+      <table class="table table-zebra">
+        <thead><tr><th>File</th><th>What changed</th><th>Size</th></tr></thead>
+        <tbody>
+          <tr class="align-top">
+            <td class="mono font-semibold">dashboard/backend/starting_pitcher_predictions.py<div class="badge badge-success badge-soft badge-sm mt-1">new</div></td>
+            <td class="text-sm text-base-content/80"><span class="mono">get_placeholder_predictions(games)</span> &mdash; pure function, two sample-stat rows per real game (home + away "TBD" starter), cycling through 4 fixed stat-sets.</td>
+            <td class="mono text-sm">36 lines</td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">dashboard/backend/tests/test_starting_pitcher_predictions*.py<div class="badge badge-success badge-soft badge-sm mt-1">new</div></td>
+            <td class="text-sm text-base-content/80">9 tests across the pure function + the route &mdash; row count per game, real game_pk/team passthrough, sample-data flag, empty-schedule edge case.</td>
+            <td class="mono text-sm">89 lines</td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">dashboard/backend/main.py<div class="badge badge-info badge-soft badge-sm mt-1">edited</div></td>
+            <td class="text-sm text-base-content/80">New <span class="mono">GET /api/starting-pitcher-predictions</span>, reuses the existing <span class="mono">_load_schedule()</span> helper to attach real game_pk/team data to the sample rows.</td>
+            <td class="mono text-sm">+12 lines</td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">dashboard/frontend/src/components/StartingPitcherPredictions.jsx<div class="badge badge-success badge-soft badge-sm mt-1">new</div></td>
+            <td class="text-sm text-base-content/80">Section 4 &mdash; per-game <span class="mono">&lt;tbody&gt;</span> groups (scroll/highlight targets), color dot, "predicted, not realized" caption, "sample data" pill.</td>
+            <td class="mono text-sm">133 lines</td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">dashboard/frontend/src/lib/gameColor.js<div class="badge badge-success badge-soft badge-sm mt-1">new</div></td>
+            <td class="text-sm text-base-content/80">Shared <span class="mono">getGameColor(gamePk)</span> &mdash; deterministic palette lookup, imported by both Slate and Section 4 so the same game always gets the same color regardless of render order.</td>
+            <td class="mono text-sm">24 lines</td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">dashboard/frontend/src/components/TodaysSlate.jsx<div class="badge badge-info badge-soft badge-sm mt-1">edited</div></td>
+            <td class="text-sm text-base-content/80">Row click handler (<span class="mono">scrollToPredictions</span>) + color dot next to the matchup.</td>
+            <td class="mono text-sm">+34 lines</td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">dashboard/frontend/src/components/PipelineStatus.jsx<div class="badge badge-info badge-soft badge-sm mt-1">edited</div></td>
+            <td class="text-sm text-base-content/80"><span class="mono">formatCompletedAt()</span> + rendering it in the card metadata line.</td>
+            <td class="mono text-sm">+19 lines</td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">dashboard/frontend/src/index.css<div class="badge badge-info badge-soft badge-sm mt-1">edited</div></td>
+            <td class="text-sm text-base-content/80">Space Mono + Permanent Marker vars, marker-font title styling, <span class="mono">.game-dot</span>, <span class="mono">.row-highlight</span> pulse keyframe, <span class="mono">.section-caption</span>.</td>
+            <td class="mono text-sm">+46 lines</td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">dashboard/frontend/index.html<div class="badge badge-info badge-soft badge-sm mt-1">edited</div></td>
+            <td class="text-sm text-base-content/80">Google Fonts link: swapped JetBrains Mono &rarr; Space Mono, added Permanent Marker.</td>
+            <td class="mono text-sm">1 line</td>
+          </tr>
+          <tr class="align-top">
+            <td class="mono font-semibold">dashboard/frontend/src/App.jsx<div class="badge badge-info badge-soft badge-sm mt-1">edited</div></td>
+            <td class="text-sm text-base-content/80">Title text &rarr; "MLB pre-game"; wired in <span class="mono">&lt;StartingPitcherPredictions /&gt;</span> as Section 4.</td>
+            <td class="mono text-sm">+7 lines</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-<div class="note">Full context in session memory: <code>project_odds_fetch_outage.md</code></div>
+  <section class="space-y-3">
+    <h2 class="text-xl font-semibold">Caught mid-session</h2>
+    <p class="text-base-content/70 max-w-3xl">
+      User asked to drop the <span class="mono">"(Team Name)"</span> suffix from the placeholder pitcher
+      name since team already has its own column. Fixing it exposed a real bug: with every pitcher_name now
+      literally <span class="mono">"TBD"</span>, the two rows in a game shared a React key
+      (<span class="mono">key={'{pitcher.pitcher_name}'}</span>) &mdash; fixed to
+      <span class="mono">{'`${pitcher.game_pk}-${pitcher.team}`'}</span>. Caught before the user noticed.
+    </p>
+  </section>
 
+  <section class="space-y-3">
+    <h2 class="text-xl font-semibold">Not independently verified</h2>
+    <p class="text-base-content/70 max-w-3xl">
+      Still no browser tool connected. Verified via <span class="mono">npm run build</span> (clean each
+      time) and live <span class="mono">curl</span> against both endpoints confirming identical game_pk sets
+      &mdash; not a rendered screenshot of the click/scroll/pulse interaction itself. Dev servers are running
+      at <span class="mono">:5173</span> / <span class="mono">:8000</span> for the user to try it directly.
+    </p>
+  </section>
+
+</main>
 </body>
 </html>

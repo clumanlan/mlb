@@ -4,6 +4,8 @@ import pytest
 import numpy as np
 
 from models.hit_predictor.processing.features.interaction_feats import (
+    find_player_vs_league_pairs,
+    build_player_vs_league_features,
     find_rolling_trend_pairs,
     find_sample_size_col,
     build_trend_features,
@@ -224,3 +226,171 @@ def test_build_shrinkage_weight_features_preserves_original_columns():
 
     assert 'batter_roll_last10g_ba' in result.columns
     assert 'unrelated_col' in result.columns
+
+
+# --------------------- PLAYER-VS-LEAGUE INTERACTION FEATS (k_predictor v9) --------------------- #
+# Does the model know a player's rate relative to the CURRENT league environment,
+# not just its raw level? Same "auto-match column pairs by name" pattern as
+# find_rolling_trend_pairs/build_trend_features above, but matching a player-level
+# rolling column against its SAME-WINDOW league-level counterpart (built by
+# rolling_stats.build_league_pa_outcome_rolling_feats/build_league_batter_rolling_stats)
+# instead of a short-window column against its own season baseline.
+
+def test_find_player_vs_league_pairs_matches_same_window_and_stat():
+    """A player column pairs with the league column sharing its exact window
+    bucket and stat name, regardless of the player-side entity prefix."""
+
+    columns = ['batter_roll_season_pa_strikeout_rate', 'league_roll_season_pa_strikeout_rate']
+
+    result = find_player_vs_league_pairs(columns)
+
+    assert result == [('batter_roll_season_pa_strikeout_rate', 'league_roll_season_pa_strikeout_rate')]
+
+
+def test_find_player_vs_league_pairs_skips_columns_missing_a_league_counterpart():
+    """No league_roll_season_pa_strikeout_rate present at all -> no pair,
+    even though other columns exist."""
+
+    columns = ['batter_roll_season_pa_strikeout_rate', 'pitcher_shrunk_whip', 'batting_order']
+
+    result = find_player_vs_league_pairs(columns)
+
+    assert result == []
+
+
+def test_find_player_vs_league_pairs_does_not_pair_league_columns_with_each_other():
+    """A league_roll_* column must never appear as the 'player' side of a
+    pair, even when another league column shares no stat name with it."""
+
+    columns = ['league_roll_season_pa_strikeout_rate', 'league_roll_season_ba']
+
+    result = find_player_vs_league_pairs(columns)
+
+    assert result == []
+
+
+def test_find_player_vs_league_pairs_requires_matching_window_bucket():
+    """A trailing-window player column must not pair with a season-window
+    league column even though the stat name matches -- window buckets must
+    match exactly, unlike find_rolling_trend_pairs which spans windows on
+    purpose."""
+
+    columns = ['batter_roll_last10g_pa_strikeout_rate', 'league_roll_season_pa_strikeout_rate']
+
+    result = find_player_vs_league_pairs(columns)
+
+    assert result == []
+
+
+def test_find_player_vs_league_pairs_excludes_sample_size_denominator_columns():
+    """pa_total (and the other _SAMPLE_SIZE_SUFFIXES: plate_appearances, ab,
+    ip, n_pitches) are raw COUNTS, not rates -- a pitcher's own season PA
+    count (hundreds) divided by the league's cumulative season PA count
+    (tens of thousands) is not a meaningful player-vs-league ratio the way a
+    rate comparison is, even though both columns exist and share a stat
+    name. Caught via a real degenerate run: pitcher_vs_league_ratio_season_
+    pa_total came back with mean 0.0037 and a constant direction of -1.0."""
+
+    columns = ['pitcher_roll_season_pa_total', 'league_roll_season_pa_total']
+
+    result = find_player_vs_league_pairs(columns)
+
+    assert result == []
+
+
+def test_find_player_vs_league_pairs_matches_multiple_entities_against_the_same_league_stat():
+    """batter, pitcher, and opp_team columns must each independently pair
+    against the same league column."""
+
+    columns = [
+        'batter_roll_season_pa_strikeout_rate',
+        'pitcher_roll_season_pa_strikeout_rate',
+        'opp_team_roll_season_pa_strikeout_rate',
+        'league_roll_season_pa_strikeout_rate',
+    ]
+
+    result = find_player_vs_league_pairs(columns)
+
+    assert result == sorted([
+        ('batter_roll_season_pa_strikeout_rate', 'league_roll_season_pa_strikeout_rate'),
+        ('pitcher_roll_season_pa_strikeout_rate', 'league_roll_season_pa_strikeout_rate'),
+        ('opp_team_roll_season_pa_strikeout_rate', 'league_roll_season_pa_strikeout_rate'),
+    ])
+
+
+def test_build_player_vs_league_features_ratio_is_player_divided_by_league():
+    """batter_vs_league_ratio_season_pa_strikeout_rate = player / league --
+    >1 means this batter strikes out more than the current league average."""
+
+    df = pd.DataFrame({
+        'batter_roll_season_pa_strikeout_rate': [0.30, 0.15],
+        'league_roll_season_pa_strikeout_rate': [0.22, 0.22],
+    })
+    pairs = [('batter_roll_season_pa_strikeout_rate', 'league_roll_season_pa_strikeout_rate')]
+
+    result = build_player_vs_league_features(df, pairs)
+
+    assert result['batter_vs_league_ratio_season_pa_strikeout_rate'].tolist() == pytest.approx([0.30 / 0.22, 0.15 / 0.22])
+
+
+def test_build_player_vs_league_features_ratio_guards_divide_by_zero():
+    """A zero league rate (shouldn't happen with real data, but the guard
+    must hold) must not blow up the ratio into inf -- NaN instead."""
+
+    df = pd.DataFrame({
+        'batter_roll_season_pa_strikeout_rate': [0.30],
+        'league_roll_season_pa_strikeout_rate': [0.0],
+    })
+    pairs = [('batter_roll_season_pa_strikeout_rate', 'league_roll_season_pa_strikeout_rate')]
+
+    result = build_player_vs_league_features(df, pairs)
+
+    assert pd.isna(result['batter_vs_league_ratio_season_pa_strikeout_rate'].iloc[0])
+
+
+def test_build_player_vs_league_features_direction_is_sign_of_the_difference():
+    """batter_vs_league_direction_season_pa_strikeout_rate is +1 when the
+    player is above the league rate, -1 when below, 0 when exactly equal."""
+
+    df = pd.DataFrame({
+        'batter_roll_season_pa_strikeout_rate': [0.30, 0.15, 0.22],
+        'league_roll_season_pa_strikeout_rate': [0.22, 0.22, 0.22],
+    })
+    pairs = [('batter_roll_season_pa_strikeout_rate', 'league_roll_season_pa_strikeout_rate')]
+
+    result = build_player_vs_league_features(df, pairs)
+
+    assert result['batter_vs_league_direction_season_pa_strikeout_rate'].tolist() == [1.0, -1.0, 0.0]
+
+
+def test_build_player_vs_league_features_preserves_original_columns():
+    df = pd.DataFrame({
+        'batter_roll_season_pa_strikeout_rate': [0.30],
+        'league_roll_season_pa_strikeout_rate': [0.22],
+        'unrelated_col': [1],
+    })
+    pairs = [('batter_roll_season_pa_strikeout_rate', 'league_roll_season_pa_strikeout_rate')]
+
+    result = build_player_vs_league_features(df, pairs)
+
+    assert 'batter_roll_season_pa_strikeout_rate' in result.columns
+    assert 'league_roll_season_pa_strikeout_rate' in result.columns
+    assert 'unrelated_col' in result.columns
+
+
+def test_build_player_vs_league_features_naming_includes_window_bucket():
+    """A trailing-window pair (not exercised by k_predictor v9 itself, which
+    only uses window='season' -- but the function must be correct for a
+    future trailing-window league table without changes) must name its
+    output columns with the matching window bucket, not hardcode 'season'."""
+
+    df = pd.DataFrame({
+        'pitcher_roll_last5g_pa_walk_rate': [0.10],
+        'league_roll_last5g_pa_walk_rate': [0.08],
+    })
+    pairs = [('pitcher_roll_last5g_pa_walk_rate', 'league_roll_last5g_pa_walk_rate')]
+
+    result = build_player_vs_league_features(df, pairs)
+
+    assert 'pitcher_vs_league_ratio_last5g_pa_walk_rate' in result.columns
+    assert 'pitcher_vs_league_direction_last5g_pa_walk_rate' in result.columns

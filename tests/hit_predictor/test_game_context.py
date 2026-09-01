@@ -19,6 +19,8 @@ from models.hit_predictor.processing.features.game_context import (
     build_batters_faced_distribution,
     build_pitcher_rest_days,
     build_pitcher_workload_density,
+    build_pitcher_anomaly_count_this_season,
+    build_team_scoring_volatility,
 )
 
 
@@ -216,6 +218,71 @@ def test_build_team_win_loss_record_first_game_of_season_is_nan():
 
     row1 = result[result['team_id'] == 'H'].iloc[0]
     assert pd.isna(row1['team_roll_season_win_pct'])
+
+
+def test_build_team_scoring_volatility_season_window_computes_mean_std_max():
+    """Team H scores 5, 1, 9 in g1/g2/g3. Rolled into g3 (uses g1, g2 only):
+    mean=(5+1)/2=3.0, sample std of [5,1]=sqrt(((5-3)^2+(1-3)^2)/(2-1))=sqrt(8),
+    max=5 — not the current game's own 9."""
+    schedule = pd.DataFrame([
+        _schedule_game(gamepk='g1', game_date='2023-04-01', home_id='H', away_id='X', home_score=5, away_score=0),
+        _schedule_game(gamepk='g2', game_date='2023-04-02', home_id='H', away_id='X', home_score=1, away_score=0),
+        _schedule_game(gamepk='g3', game_date='2023-04-03', home_id='H', away_id='X', home_score=9, away_score=0),
+    ])
+
+    result = build_team_scoring_volatility(schedule, window='season')
+
+    row3 = result[(result['team_id'] == 'H') & (result['gamepk'] == 'g3')].iloc[0]
+    assert row3['team_roll_season_runs_scored_mean'] == pytest.approx(3.0)
+    assert row3['team_roll_season_runs_scored_std'] == pytest.approx(np.sqrt(8))
+    assert row3['team_roll_season_runs_scored_max'] == 5
+
+
+def test_build_team_scoring_volatility_short_window_is_trailing_n_games():
+    """Team H scores 10, 2, 4 in g1/g2/g3. Rolled into g4 at window=2 uses
+    only g2/g3 (mean=3, max=4) — a different answer than season, which
+    would use g1/g2/g3 (mean≈5.33, max=10)."""
+    schedule = pd.DataFrame([
+        _schedule_game(gamepk='g1', game_date='2023-04-01', home_id='H', away_id='X', home_score=10, away_score=0),
+        _schedule_game(gamepk='g2', game_date='2023-04-02', home_id='H', away_id='X', home_score=2, away_score=0),
+        _schedule_game(gamepk='g3', game_date='2023-04-03', home_id='H', away_id='X', home_score=4, away_score=0),
+        _schedule_game(gamepk='g4', game_date='2023-04-04', home_id='H', away_id='X', home_score=1, away_score=0),
+    ])
+
+    result = build_team_scoring_volatility(schedule, window=2)
+
+    row4 = result[(result['team_id'] == 'H') & (result['gamepk'] == 'g4')].iloc[0]
+    assert row4['team_roll_last2g_runs_scored_mean'] == pytest.approx(3.0)
+    assert row4['team_roll_last2g_runs_scored_max'] == 4
+
+
+def test_build_team_scoring_volatility_first_game_of_season_is_nan():
+    schedule = pd.DataFrame([
+        _schedule_game(gamepk='g1', game_date='2023-04-01', home_id='H', away_id='X', home_score=5, away_score=0),
+    ])
+
+    result = build_team_scoring_volatility(schedule, window='season')
+
+    row1 = result[result['team_id'] == 'H'].iloc[0]
+    assert pd.isna(row1['team_roll_season_runs_scored_mean'])
+    assert pd.isna(row1['team_roll_season_runs_scored_std'])
+    assert pd.isna(row1['team_roll_season_runs_scored_max'])
+
+
+def test_build_team_scoring_volatility_std_is_nan_with_only_one_prior_game():
+    """Sample std is undefined with fewer than 2 prior games — mean and max
+    are still defined off that single prior game."""
+    schedule = pd.DataFrame([
+        _schedule_game(gamepk='g1', game_date='2023-04-01', home_id='H', away_id='X', home_score=5, away_score=0),
+        _schedule_game(gamepk='g2', game_date='2023-04-02', home_id='H', away_id='X', home_score=9, away_score=0),
+    ])
+
+    result = build_team_scoring_volatility(schedule, window='season')
+
+    row2 = result[(result['team_id'] == 'H') & (result['gamepk'] == 'g2')].iloc[0]
+    assert row2['team_roll_season_runs_scored_mean'] == pytest.approx(5.0)
+    assert row2['team_roll_season_runs_scored_max'] == 5
+    assert pd.isna(row2['team_roll_season_runs_scored_std'])
 
 
 def test_build_team_rest_days_computes_calendar_days_since_last_game():
@@ -1105,3 +1172,72 @@ def test_build_batters_faced_distribution_always_returns_full_length_array():
     pmf = result['batters_faced_pmf'].iloc[0]
 
     assert len(pmf) == 21
+
+
+def _anomaly_row(personId='10', gamepk='g1', game_season=2024, game_date='2024-04-01',
+                  realized_batters_faced=20, expected_batters_faced=20.0,
+                  expected_batters_faced_weight=0.5):
+    return {
+        'personId': personId, 'gamepk': gamepk, 'game_season': game_season,
+        'game_date': pd.Timestamp(game_date), 'realized_batters_faced': realized_batters_faced,
+        'expected_batters_faced': expected_batters_faced,
+        'expected_batters_faced_weight': expected_batters_faced_weight,
+    }
+
+
+def test_build_pitcher_anomaly_count_flags_prior_anomaly_and_excludes_current_start():
+    """Start 2 is anomalous (6 < 0.6*24=14.4, weight>=0.3) but its OWN count
+    must still be 0 — only start 3 should reflect it, via the prior start."""
+
+    rows = [
+        _anomaly_row(gamepk='g1', game_date='2024-04-01', realized_batters_faced=25,
+                     expected_batters_faced=24, expected_batters_faced_weight=0.5),
+        _anomaly_row(gamepk='g2', game_date='2024-04-06', realized_batters_faced=6,
+                     expected_batters_faced=24, expected_batters_faced_weight=0.5),
+        _anomaly_row(gamepk='g3', game_date='2024-04-11', realized_batters_faced=23,
+                     expected_batters_faced=23, expected_batters_faced_weight=0.7),
+    ]
+
+    result = build_pitcher_anomaly_count_this_season(pd.DataFrame(rows))
+
+    counts = result.set_index('gamepk')['pitcher_anomaly_count_this_season']
+    assert counts['g1'] == 0
+    assert counts['g2'] == 0
+    assert counts['g3'] == 1
+
+
+def test_build_pitcher_anomaly_count_ignores_low_weight_starts():
+    """A short start (4 < 0.6*20=12) with weight below min_weight=0.3 (a
+    cold-start pitcher whose cascade estimate isn't reliable yet) must NOT
+    count as an anomaly for later starts — avoids conflating this with the
+    already-closed cold-start problem."""
+
+    rows = [
+        _anomaly_row(gamepk='g1', game_date='2024-04-01', realized_batters_faced=4,
+                     expected_batters_faced=20, expected_batters_faced_weight=0.1),
+        _anomaly_row(gamepk='g2', game_date='2024-04-06', realized_batters_faced=22,
+                     expected_batters_faced=21, expected_batters_faced_weight=0.4),
+    ]
+
+    result = build_pitcher_anomaly_count_this_season(pd.DataFrame(rows))
+
+    row_g2 = result[result['gamepk'] == 'g2'].iloc[0]
+    assert row_g2['pitcher_anomaly_count_this_season'] == 0
+
+
+def test_build_pitcher_anomaly_count_resets_each_season():
+    """An anomaly in 2023 must not carry into the pitcher's 2024 count."""
+
+    rows = [
+        _anomaly_row(gamepk='g1', game_season=2023, game_date='2023-04-01',
+                     realized_batters_faced=6, expected_batters_faced=24,
+                     expected_batters_faced_weight=0.5),
+        _anomaly_row(gamepk='g2', game_season=2024, game_date='2024-04-01',
+                     realized_batters_faced=22, expected_batters_faced=21,
+                     expected_batters_faced_weight=0.4),
+    ]
+
+    result = build_pitcher_anomaly_count_this_season(pd.DataFrame(rows))
+
+    row_g2 = result[result['gamepk'] == 'g2'].iloc[0]
+    assert row_g2['pitcher_anomaly_count_this_season'] == 0
