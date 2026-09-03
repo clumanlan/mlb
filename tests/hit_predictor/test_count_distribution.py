@@ -7,6 +7,7 @@ from models.hit_predictor.utils.count_distribution import (
     poisson_binomial_mixture_pmf,
     prob_exceeds_line,
     negative_binomial_pmf,
+    poisson_pmf,
 )
 
 
@@ -160,3 +161,30 @@ class TestNegativeBinomialPmf:
         assert len(result) == max_k + 1
         assert (result >= 0).all()
         assert sum(result) >= 0.95
+
+
+class TestPoissonPmf:
+    def test_poisson_pmf_matches_scipy_poisson_at_known_mean(self):
+        """Pins poisson_pmf as a thin, drop-in-compatible wrapper around
+        scipy.stats.poisson — k_predictor v13 sums several batters'
+        independent Poisson(mean_i) predictions into one Poisson(sum(mean_i))
+        per start (a real, closed-form property of the Poisson distribution,
+        not an approximation), then turns that single combined mean into a
+        pmf via this function — no new combination algorithm needed, unlike
+        negative_binomial_pmf's role for v12."""
+        mean, max_k = 6.0, 20
+        expected = poisson.pmf(np.arange(max_k + 1), mean)
+
+        result = poisson_pmf(mean, max_k)
+
+        assert result == pytest.approx(expected)
+
+    @pytest.mark.parametrize("mean", [0.5, 2.0, 6.0, 12.0])
+    def test_poisson_pmf_is_a_valid_distribution(self, mean):
+        max_k = 30
+
+        result = poisson_pmf(mean, max_k)
+
+        assert len(result) == max_k + 1
+        assert (result >= 0).all()
+        assert sum(result) == pytest.approx(1.0, abs=1e-5)

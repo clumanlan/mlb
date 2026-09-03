@@ -1,7 +1,7 @@
 import math
 
 import numpy as np
-from scipy.stats import nbinom
+from scipy.stats import nbinom, poisson
 
 
 def poisson_binomial_pmf(probabilities: list[float]) -> np.ndarray:
@@ -68,6 +68,20 @@ def negative_binomial_pmf(mean: float, alpha: float, max_k: int) -> np.ndarray:
     n = 1.0 / alpha
     p = n / (n + mean)
     return nbinom.pmf(np.arange(max_k + 1), n, p)
+
+
+def poisson_pmf(mean: float, max_k: int) -> np.ndarray:
+    """Poisson pmf array over k = 0..max_k for a predicted mean. Thin wrapper
+    around scipy.stats.poisson, same drop-in contract as
+    negative_binomial_pmf/poisson_binomial_pmf's output.
+
+    k_predictor v13's batter-grain model relies on a real, closed-form
+    property of the Poisson distribution to get here cheaply: a sum of
+    independent Poisson(mean_i) variables is itself exactly
+    Poisson(sum(mean_i)) — so combining several batters' predicted means
+    into one start's total-K distribution needs no new combination
+    algorithm, only this pmf builder applied to the already-summed mean."""
+    return poisson.pmf(np.arange(max_k + 1), mean)
 
 
 def prob_exceeds_line(pmf, line):

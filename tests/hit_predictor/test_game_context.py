@@ -21,6 +21,8 @@ from models.hit_predictor.processing.features.game_context import (
     build_pitcher_workload_density,
     build_pitcher_anomaly_count_this_season,
     build_team_scoring_volatility,
+    build_team_bullpen_pa_share,
+    build_batter_expected_pa,
 )
 
 
@@ -958,6 +960,89 @@ def test_build_batter_slot_expansion_deduplicates_lineup_position_collisions():
     assert slot5['batter_id'] == 'B5_starter'
 
 
+# --------------------------- BATTER EXPECTED PA (batter-grain collapse, k_predictor v13) --------------------------- #
+# Collapses build_batter_slot_expansion's one-row-per-synthetic-slot output down to
+# one row per REAL lineup batter (9 rows/start instead of ~9-45): expected_pa (how
+# many slots landed on that batter — his exposure) and expected_times_through_order_max
+# (the highest cycle he's expected to reach). Feeds k_predictor v13's Poisson GLM as
+# an exposure= offset rather than a plain feature — see ROADMAP.md's k_predictor v13 entry.
+#
+# Uses its own 'personId' pitcher-starts fixture (NOT the shared
+# _slot_expansion_pitcher_starts, which uses 'expected_pitcher_key_id') —
+# build_batter_expected_pa groups on 'personId' to match every real
+# start-grain frame in this codebase (v6, v12, score_2026_test_dates.py).
+
+def _expected_pa_pitcher_starts(expected_batters_faced=11.0):
+    return pd.DataFrame([
+        {'gamepk': 'g1', 'personId': '10', 'expected_batters_faced': expected_batters_faced},
+    ])
+
+
+def test_build_batter_expected_pa_counts_slots_per_real_batter():
+    """11 expected batters faced = one full 9-batter cycle (slots 1-9) plus 2
+    more (slots 10-11, lineup positions 1-2 again). The leadoff batter (B1)
+    is assigned 2 slots (1 and 10) -> expected_pa=2, times_through_order_max=2.
+    A batter only reached once (B3, slot 3 only) -> expected_pa=1, max=1."""
+
+    slot_expansion = build_batter_slot_expansion(_expected_pa_pitcher_starts(), _slot_expansion_batting_order())
+    result = build_batter_expected_pa(slot_expansion)
+
+    row_b1 = result[result['batter_id'] == 'B1'].iloc[0]
+    assert row_b1['expected_pa'] == 2
+    assert row_b1['expected_times_through_order_max'] == 2
+
+    row_b3 = result[result['batter_id'] == 'B3'].iloc[0]
+    assert row_b3['expected_pa'] == 1
+    assert row_b3['expected_times_through_order_max'] == 1
+
+
+def test_build_batter_expected_pa_one_row_per_real_lineup_batter():
+    """9 real lineup batters in, 9 rows out — regardless of how many
+    synthetic slots (11) fed into the collapse."""
+
+    slot_expansion = build_batter_slot_expansion(_expected_pa_pitcher_starts(), _slot_expansion_batting_order())
+    result = build_batter_expected_pa(slot_expansion)
+
+    assert len(result) == 9
+    assert set(result['batter_id']) == {f'B{i}' for i in range(1, 10)}
+
+
+def test_build_batter_expected_pa_counts_raw_pa_even_when_times_through_order_is_capped():
+    """28 expected batters faced -> the leadoff batter (B1) is assigned slots
+    1, 10, 19, 28 (4 real plate appearances -> expected_pa=4), but his 4th
+    slot is cycle 4, which build_batter_slot_expansion already caps at 3 —
+    so expected_times_through_order_max must be 3, NOT 4, while expected_pa
+    (a raw count, never capped) must still be the true 4."""
+
+    slot_expansion = build_batter_slot_expansion(
+        _expected_pa_pitcher_starts(expected_batters_faced=28.0), _slot_expansion_batting_order(),
+    )
+    result = build_batter_expected_pa(slot_expansion)
+
+    row_b1 = result[result['batter_id'] == 'B1'].iloc[0]
+    assert row_b1['expected_pa'] == 4
+    assert row_b1['expected_times_through_order_max'] == 3
+
+
+def test_build_batter_expected_pa_keys_on_personid_not_shared_lineup_position():
+    """Two different starts (different personId) sharing the SAME gamepk —
+    e.g. both starters of one game — must not be collapsed together just
+    because they land on the same gamepk/lineup_position. Each pitcher's own
+    expected_pa for a shared lineup_position must stay distinct."""
+
+    pitcher_starts = pd.DataFrame([
+        {'gamepk': 'g1', 'personId': '10', 'expected_batters_faced': 9.0},
+        {'gamepk': 'g1', 'personId': '20', 'expected_batters_faced': 18.0},
+    ])
+    slot_expansion = build_batter_slot_expansion(pitcher_starts, _slot_expansion_batting_order())
+    result = build_batter_expected_pa(slot_expansion)
+
+    row_p10_b1 = result[(result['personId'] == '10') & (result['batter_id'] == 'B1')].iloc[0]
+    row_p20_b1 = result[(result['personId'] == '20') & (result['batter_id'] == 'B1')].iloc[0]
+    assert row_p10_b1['expected_pa'] == 1
+    assert row_p20_b1['expected_pa'] == 2
+
+
 def test_build_pitcher_role_by_inning_rounds_up_and_splits_sp_vs_bullpen():
     """expected_start_innings=5.4 -> ceil=6 -> innings 1-6 are 'sp' (a
     partial inning pitched still counts as that inning belonging to the
@@ -1223,6 +1308,83 @@ def test_build_pitcher_anomaly_count_ignores_low_weight_starts():
 
     row_g2 = result[result['gamepk'] == 'g2'].iloc[0]
     assert row_g2['pitcher_anomaly_count_this_season'] == 0
+
+
+# --------------------------- TEAM BULLPEN PA SHARE (manager quick-hook tendency) --------------------------- #
+# Rolling, point-in-time-safe proxy for how much of a game's plate appearances a
+# team's bullpen (vs. its starter) has historically accounted for -- higher =
+# quicker hook. Roll counts (bullpen_pa, team_total_pa) separately via
+# _rolling_sum, divide once via _finalize_rates -- same "roll counts, not rates"
+# rule build_team_win_loss_record's win_pct already follows. Reuses
+# _start_pa_this_season_pbp_row, which already supports pitcher_role='sp'|'bullpen'.
+
+def test_build_team_bullpen_pa_share_season_window_rolls_forward_share():
+    """T1 g1: 3 sp PAs + 2 bullpen PAs = 5 total, share = 2/5 = 0.4. Rolled
+    into g2: g2's own row reflects g1's share, not anything computed from g2
+    itself."""
+
+    rows = []
+    for pid in range(1, 4):
+        rows.append(_start_pa_this_season_pbp_row(gamepk='g1', play_id=pid, pitcher_role='sp'))
+    for pid in range(4, 6):
+        rows.append(_start_pa_this_season_pbp_row(gamepk='g1', play_id=pid, pitcher_role='bullpen'))
+    rows.append(_start_pa_this_season_pbp_row(
+        gamepk='g2', game_date='2024-04-06', game_datetime='2024-04-06 19:00', play_id=1, pitcher_role='sp',
+    ))
+
+    result = build_team_bullpen_pa_share(pd.DataFrame(rows), window='season')
+
+    row_g2 = result[(result['team_id'] == 'T1') & (result['gamepk'] == 'g2')].iloc[0]
+    assert row_g2['team_roll_season_bullpen_pa_share'] == pytest.approx(0.4)
+
+
+def test_build_team_bullpen_pa_share_first_game_of_season_is_nan():
+    rows = [_start_pa_this_season_pbp_row(gamepk='g1', play_id=1, pitcher_role='sp')]
+
+    result = build_team_bullpen_pa_share(pd.DataFrame(rows), window='season')
+
+    row_g1 = result[result['team_id'] == 'T1'].iloc[0]
+    assert pd.isna(row_g1['team_roll_season_bullpen_pa_share'])
+
+
+def test_build_team_bullpen_pa_share_short_window_is_trailing_n_games():
+    """window=2: g3's rolled share reflects only g1 (all sp, share=0) + g2
+    (all bullpen, share=1) -> pooled 3 bullpen PAs out of 6 total = 0.5, not
+    a 3-game expanding value."""
+
+    rows = [
+        _start_pa_this_season_pbp_row(gamepk='g1', game_date='2024-04-01', game_datetime='2024-04-01 19:00', play_id=1, pitcher_role='sp'),
+        _start_pa_this_season_pbp_row(gamepk='g1', game_date='2024-04-01', game_datetime='2024-04-01 19:00', play_id=2, pitcher_role='sp'),
+        _start_pa_this_season_pbp_row(gamepk='g1', game_date='2024-04-01', game_datetime='2024-04-01 19:00', play_id=3, pitcher_role='sp'),
+        _start_pa_this_season_pbp_row(gamepk='g2', game_date='2024-04-03', game_datetime='2024-04-03 19:00', play_id=1, pitcher_role='bullpen'),
+        _start_pa_this_season_pbp_row(gamepk='g2', game_date='2024-04-03', game_datetime='2024-04-03 19:00', play_id=2, pitcher_role='bullpen'),
+        _start_pa_this_season_pbp_row(gamepk='g2', game_date='2024-04-03', game_datetime='2024-04-03 19:00', play_id=3, pitcher_role='bullpen'),
+        _start_pa_this_season_pbp_row(gamepk='g3', game_date='2024-04-06', game_datetime='2024-04-06 19:00', play_id=1, pitcher_role='sp'),
+    ]
+
+    result = build_team_bullpen_pa_share(pd.DataFrame(rows), window=2)
+
+    row_g3 = result[(result['team_id'] == 'T1') & (result['gamepk'] == 'g3')].iloc[0]
+    assert row_g3['team_roll_last2g_bullpen_pa_share'] == pytest.approx(0.5)
+
+
+def test_build_team_bullpen_pa_share_complete_game_start_gives_zero_not_nan():
+    """T1 g1 is a real complete game -- ONLY sp PAs, no bullpen rows at all
+    that game (or anywhere in the input). Rolled into g2, the share must be a
+    real 0.0 (this team's bullpen threw 0% of PAs in the window), not NaN
+    ("no data yet")."""
+
+    rows = []
+    for pid in range(1, 4):
+        rows.append(_start_pa_this_season_pbp_row(gamepk='g1', play_id=pid, pitcher_role='sp'))
+    rows.append(_start_pa_this_season_pbp_row(
+        gamepk='g2', game_date='2024-04-06', game_datetime='2024-04-06 19:00', play_id=1, pitcher_role='sp',
+    ))
+
+    result = build_team_bullpen_pa_share(pd.DataFrame(rows), window='season')
+
+    row_g2 = result[(result['team_id'] == 'T1') & (result['gamepk'] == 'g2')].iloc[0]
+    assert row_g2['team_roll_season_bullpen_pa_share'] == pytest.approx(0.0)
 
 
 def test_build_pitcher_anomaly_count_resets_each_season():

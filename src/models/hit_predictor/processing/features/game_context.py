@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from .rolling_stats import _rolling_sum, _rolling_max, _rolling_pooled_std, _rolling_prefix
+from .rolling_stats import _rolling_sum, _rolling_max, _rolling_pooled_std, _rolling_prefix, _finalize_rates
 from .season_stats import _prefix_stat_cols, _pitcher_role_lookup
 
 # Pre-game-knowable game-level context (venue, calendar, team form/rest,
@@ -498,6 +498,49 @@ def build_pitcher_anomaly_count_this_season(
     return df[['personId', 'gamepk', 'pitcher_anomaly_count_this_season']]
 
 
+def build_team_bullpen_pa_share(pbp: pd.DataFrame, window: str | int) -> pd.DataFrame:
+    """One row per (team_id, gamepk): a rolling, point-in-time-safe proxy for
+    that team's manager quick-hook tendency — the share of the game's plate
+    appearances the bullpen (not the starter) has historically accounted
+    for, shift(1)'d so a game's own realized share never leaks into its own
+    pre-game row. Higher = quicker hook.
+
+    window='season': expanding season-to-date share (resets each year).
+    window=<int>: trailing N-game share (carries across season boundaries).
+
+    Counts are rolled separately (bullpen_pa, team_total_pa) and divided
+    once at the end via _finalize_rates — never by averaging per-game
+    shares, which would incorrectly weight a 5-PA start the same as a
+    30-PA one. A team-game with zero bullpen PAs (a complete game) rolls in
+    as a real 0, not NaN.
+    """
+    last_pitch = pbp[pbp['pitch_number'] == pbp.groupby(['gamepk', 'play_id'])['pitch_number'].transform('max')]
+
+    key_cols = ['pitcher_team_id', 'gamepk', 'game_date', 'game_datetime', 'game_season']
+    per_role = (
+        last_pitch
+        .groupby(key_cols + ['pitcher_role'])
+        .agg(pa_n=('play_result', 'count'))
+        .reset_index()
+    )
+    wide = per_role.pivot_table(index=key_cols, columns='pitcher_role', values='pa_n', fill_value=0).reset_index()
+    wide.columns.name = None
+
+    wide['bullpen_pa'] = wide['bullpen'] if 'bullpen' in wide.columns else 0
+    wide['team_total_pa'] = wide['bullpen_pa'] + (wide['sp'] if 'sp' in wide.columns else 0)
+    wide = wide.rename(columns={'pitcher_team_id': 'team_id'})
+
+    rolled = _rolling_sum(
+        wide, entity_col='team_id', cols=['bullpen_pa', 'team_total_pa'], window=window, sort_col='game_datetime',
+    )
+    rolled = _finalize_rates(rolled, {'bullpen_pa_share': ('bullpen_pa', 'team_total_pa')})
+
+    out_key_cols = ['team_id', 'gamepk', 'game_date', 'game_datetime', 'game_season']
+    rolled = rolled[out_key_cols + ['bullpen_pa_share']]
+
+    return _prefix_stat_cols(rolled, prefix=_rolling_prefix('team', window), key_cols=out_key_cols)
+
+
 # --------------------------- LONG EXPANSION (Epic E, replaces expected_role.py) --------------------------- #
 
 def build_pitcher_role_by_inning(team_game: pd.DataFrame, max_innings: int = 9) -> pd.DataFrame:
@@ -573,6 +616,41 @@ def build_batter_slot_expansion(
     )
 
     return expanded.drop(columns=['n_slots'])
+
+
+def build_batter_expected_pa(slot_expansion: pd.DataFrame) -> pd.DataFrame:
+    """Collapse build_batter_slot_expansion's one-row-per-synthetic-slot output
+    (~9-45 rows/start) down to one row per REAL lineup batter (9 rows/start):
+    expected_pa (how many of that start's slots landed on this batter — his
+    plate-appearance exposure) and expected_times_through_order_max (the
+    highest cycle he's expected to reach).
+
+    expected_pa is a raw slot count and is NEVER capped; the underlying
+    expected_times_through_order column IS already capped at 3 by
+    build_batter_slot_expansion, so a batter's 4th real slot (a 4th time
+    through the order) still counts toward expected_pa=4 even though its own
+    expected_times_through_order value reads 3 — count exposure honestly,
+    keep only the TTO-shape feature capped to the value the classifier this
+    feeds was trained on.
+
+    This is the exposure input k_predictor v13's batter-grain Poisson GLM
+    fits against, via exposure=expected_pa rather than a plain feature — see
+    ROADMAP.md's k_predictor v13 entry.
+
+    Grouped on 'personId' as the pitcher key, matching every real
+    start-grain frame in this codebase (v6, v12, score_2026_test_dates.py) —
+    NOT 'expected_pitcher_key_id', which is only an intermediate-cascade
+    column name upstream of the personId rename.
+    """
+    return (
+        slot_expansion
+        .groupby(['gamepk', 'personId', 'batter_id', 'lineup_position'], dropna=False)
+        .agg(
+            expected_pa=('slot', 'count'),
+            expected_times_through_order_max=('expected_times_through_order', 'max'),
+        )
+        .reset_index()
+    )
 
 
 # --------------------------- BATTERS-FACED RESIDUAL DISTRIBUTION --------------------------- #

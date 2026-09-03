@@ -145,13 +145,49 @@ print(f"2024 SP starts with an expected_batters_faced estimate: {len(pitcher_sta
 
 
 # ── 4. Expand to synthetic batter slots, attach ONLY batter-side features ─────
+# FIXED 2026-09-02 (same bug/fix as score_2026_test_dates.py, see ROADMAP.md
+# item 6(e) / v13_results.md): build_batter_slot_expansion merges
+# batting_order onto (gamepk, lineup_position) with NO team-awareness. Every
+# gamepk here has TWO starts (home SP, away SP), each needing a DIFFERENT
+# team's 9 batters -- passing the full unscoped batting_order (as this script
+# always has) let roughly half of all synthetic slots collide against the
+# WRONG team (a pitcher's own teammates, whom he never actually faces).
+# pitcher_starts_2024 (from the expected_batters_faced cascade) only carries
+# pitcher_team_id, not home_id/away_id/opp_team_id -- derive those first, the
+# same way score_2026_test_dates.py already does, then team-scope
+# batting_order per start (expand home-team and away-team starters
+# separately, each unambiguous against the correctly opposing lineup).
 print("Expanding to synthetic batter slots...")
 batting_order = hp_pipeline._create_batting_order(batter_boxscore)
 batter_team_lookup = batter_boxscore[["gamepk", "personId", "team_id"]].rename(
     columns={"personId": "batter_id", "team_id": "batter_team_id"}
 ).drop_duplicates()
 
-slots = game_context.build_batter_slot_expansion(pitcher_starts_2024, batting_order, max_slots=MAX_SLOTS)
+schedule_teams = schedule[["gamepk", "home_id", "away_id"]].drop_duplicates("gamepk")
+pitcher_starts_2024 = pitcher_starts_2024.merge(schedule_teams, on="gamepk", how="left")
+pitcher_starts_2024["opp_team_id"] = np.where(
+    pitcher_starts_2024["pitcher_team_id"] == pitcher_starts_2024["home_id"],
+    pitcher_starts_2024["away_id"], pitcher_starts_2024["home_id"],
+)
+
+batting_order_with_team = batting_order.merge(
+    batter_team_lookup.rename(columns={"batter_team_id": "team_id"}), on=["gamepk", "batter_id"], how="left",
+)
+
+
+def opp_scoped_batting_order(starts_subset):
+    context = starts_subset[["gamepk", "opp_team_id"]].drop_duplicates()
+    scoped = context.merge(batting_order_with_team, on="gamepk", how="left")
+    scoped = scoped[scoped["team_id"] == scoped["opp_team_id"]]
+    return scoped[["gamepk", "batter_id", "batting_order"]]
+
+
+starts_home_sp = pitcher_starts_2024[pitcher_starts_2024["pitcher_team_id"] == pitcher_starts_2024["home_id"]]
+starts_away_sp = pitcher_starts_2024[pitcher_starts_2024["pitcher_team_id"] == pitcher_starts_2024["away_id"]]
+
+slots_home = game_context.build_batter_slot_expansion(starts_home_sp, opp_scoped_batting_order(starts_home_sp), max_slots=MAX_SLOTS)
+slots_away = game_context.build_batter_slot_expansion(starts_away_sp, opp_scoped_batting_order(starts_away_sp), max_slots=MAX_SLOTS)
+slots = pd.concat([slots_home, slots_away], ignore_index=True)
 slots = slots.merge(batter_team_lookup, on=["gamepk", "batter_id"], how="left")
 slots = slots.merge(batter_season_stats, on=["batter_id", "game_season"], how="left")
 slots = slots.merge(batter_pbp_rolling, on=["batter_id", "gamepk"], how="left")
