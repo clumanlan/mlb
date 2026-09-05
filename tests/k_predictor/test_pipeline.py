@@ -138,6 +138,28 @@ def test_create_pa_outcome_strikeout_excludes_bullpen_role_pas():
     assert (result['pitcher_role'] == 'sp').all()
 
 
+def test_create_pa_outcome_strikeout_adds_platoon_matchup():
+    """Mirrors hit_predictor's slice_diagnostic.py derivation: an explicit
+    same_hand/opposite_hand/switch_hitter column, so the model doesn't have
+    to rediscover the batter_bat_side == pitcher_throw_hand equality from
+    two separately-encoded categorical columns."""
+    pbp = pd.DataFrame([
+        _make_pa_outcome_row(batter_id='1', play_id='p1', pitcher_throw_hand='L', batter_bat_side='L'),
+        _make_pa_outcome_row(batter_id='1', play_id='p2', pitcher_throw_hand='L', batter_bat_side='R'),
+        _make_pa_outcome_row(batter_id='1', play_id='p3', pitcher_throw_hand='L', batter_bat_side='S'),
+        _make_pa_outcome_row(batter_id='1', play_id='p4', pitcher_throw_hand=None, batter_bat_side='R'),
+    ])
+    batter_boxscore = pd.DataFrame([{'gamepk': '1', 'personId': '1', 'batting_order': 3}])
+
+    result = create_pa_outcome_strikeout(pbp, batter_boxscore, _game_info(), _schedule())
+    result = result.set_index('play_id')
+
+    assert result.loc['p1', 'platoon_matchup'] == 'same_hand'
+    assert result.loc['p2', 'platoon_matchup'] == 'opposite_hand'
+    assert result.loc['p3', 'platoon_matchup'] == 'switch_hitter'
+    assert pd.isna(result.loc['p4', 'platoon_matchup'])
+
+
 def test_create_pa_outcome_strikeout_includes_estimated_team_pa_position():
     """Hand-computed: batter_pa_number=2, batting_order=4 -> (2-1)*9+4 = 13."""
     pbp = pd.DataFrame([_make_pa_outcome_row(batter_pa_number=2)])

@@ -49,7 +49,8 @@ Weaker candidates considered and set aside for now: player rest-day / will-not-s
 ---
 
 **Read next**, depending on what you're after:
-- `ROADMAP.md` — the living plan: current priorities, backlog, decision log
+- `ROADMAP.md` — the living plan: current priorities and backlog
+- `DECISIONS.md` — dated history of every session's findings and corrections
 - `src/models/hit_predictor/BENCHMARKS.md` — full experiment results table, what "beating baseline" means here
 - `src/models/hit_predictor/FEATURE_GLOSSARY.md` — every feature, implemented or not
 - `CODEBASE.md` — infra reference: ingestion → processing → feature store, S3 layout

@@ -1,6 +1,7 @@
 import pandas as pd
 
 from shared.model_dashboard.logic.metrics import per_row_loss
+from shared.model_dashboard.logic.slicing import slice_mask
 
 
 def compute_contribution(
@@ -16,7 +17,7 @@ def compute_contribution(
     rows = []
     for s in slices:
         feature, value = s["feature"], s["value"]
-        mask = df[feature] == value
+        mask = slice_mask(df, feature, value)
         subset = df[mask]
         n = len(subset)
         if n < min_n:

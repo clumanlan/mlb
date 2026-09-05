@@ -1,0 +1,360 @@
+/Users/clumanlan/projects/mlb/src/models/k_predictor/experiments/v14_platoon_matchup/train.py:109: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  return pd.concat(frames, ignore_index=True)
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1160: UserWarning: Inconsistent values: penalty=l1 with l1_ratio=0.0. penalty is deprecated. Please use l1_ratio only.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+/Users/clumanlan/projects/mlb/.venv/lib/python3.13/site-packages/sklearn/linear_model/_logistic.py:1135: FutureWarning: 'penalty' was deprecated in version 1.8 and will be removed in 1.10. To avoid this warning, leave 'penalty' set to its default value and use 'l1_ratio' or 'C' instead. Use l1_ratio=0 instead of penalty='l2', l1_ratio=1 instead of penalty='l1', and C=np.inf instead of penalty=None.
+  warnings.warn(
+
+Loading play-by-play...
+  s3://mlbdk/processed_data/prepared/playbyplay/2017/
+  s3://mlbdk/processed_data/prepared/playbyplay/2018/
+  s3://mlbdk/processed_data/prepared/playbyplay/2019/
+  s3://mlbdk/processed_data/prepared/playbyplay/2022/
+  s3://mlbdk/processed_data/prepared/playbyplay/2023/
+  s3://mlbdk/processed_data/prepared/playbyplay/2024/
+  s3://mlbdk/processed_data/prepared/playbyplay/2025/
+
+Loading schedule...
+  s3://mlbdk/processed_data/games/schedule/2016/
+  s3://mlbdk/processed_data/games/schedule/2017/
+  s3://mlbdk/processed_data/games/schedule/2018/
+  s3://mlbdk/processed_data/games/schedule/2019/
+  s3://mlbdk/processed_data/games/schedule/2022/
+  s3://mlbdk/processed_data/games/schedule/2023/
+  s3://mlbdk/processed_data/games/schedule/2024/
+  s3://mlbdk/processed_data/games/schedule/2025/
+
+Loading game info...
+  s3://mlbdk/processed_data/games/game_info/2017/
+  s3://mlbdk/processed_data/games/game_info/2018/
+  s3://mlbdk/processed_data/games/game_info/2019/
+  s3://mlbdk/processed_data/games/game_info/2022/
+  s3://mlbdk/processed_data/games/game_info/2023/
+  s3://mlbdk/processed_data/games/game_info/2024/
+  s3://mlbdk/processed_data/games/game_info/2025/
+
+Loading batter boxscore...
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2016/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2017/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2018/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2019/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2022/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2023/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2024/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2025/
+
+Loading pitcher boxscore...
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2016/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2017/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2018/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2019/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2022/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2023/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2024/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2025/
+
+Loading player info...
+
+Building PA-grain DataFrame...
+
+Fit seasons:  [2018, 2019, 2022, 2023]
+Val season:   2024  ← iterate against this
+Test season:  2025 ← locked away, not evaluated here
+Feature count: 43 (v6's 42 + platoon_matchup)
+Strikeout rate — train: 0.218  val: 0.219
+
+Evaluating naive (most frequent class)...
+Evaluating naive (per expected-pitcher-role K rate)...
+
+Tuning logistic regression (C x penalty x class_weight)...
+Top 5 of 24 LR configs by val PR-AUC:
+    C penalty class_weight   pr_auc  roc_auc
+ 10.0      l1         None 0.282285 0.598075
+  1.0      l2         None 0.282284 0.598072
+100.0      l1         None 0.282284 0.598072
+ 10.0      l2         None 0.282284 0.598069
+100.0      l2         None 0.282283 0.598068
+Best LR config: {'C': 10.0, 'penalty': 'l1', 'class_weight': None} -> PR-AUC 0.2823
+
+Tuning XGBoost (max_depth x learning_rate, early-stopped)...
+  Core fit seasons: [2018, 2019, 2022]  |  early-stop season: 2023  |  final selection: 2024 (untouched by tuning)
+All 9 XGBoost configs by val PR-AUC:
+ max_depth  learning_rate  best_iteration   pr_auc  roc_auc
+         2           0.03             610 0.283887 0.599931
+         2           0.01            1321 0.283718 0.599696
+         3           0.01             924 0.283646 0.599881
+         4           0.01             697 0.283641 0.600244
+         3           0.03             332 0.283585 0.599814
+         4           0.03             249 0.283401 0.599919
+         2           0.10             170 0.283291 0.599426
+         4           0.10              63 0.283236 0.599596
+         3           0.10             111 0.283127 0.599730
+Best XGBoost config: {'max_depth': 2, 'learning_rate': 0.03, 'best_iteration': 610} -> PR-AUC 0.2839
+
+========================================================================
+EXPERIMENT RESULTS — k_predictor v6 (hyperparameter-tuned, v3's feature set)
+Evaluated on val season 2024 (105,265 PAs)  |  Test season 2025 locked
+Primary: PR-AUC (higher=better)  |  Secondary: ROC-AUC (higher=better)
+========================================================================
+Model                          PR-AUC  vs best naive   ROC-AUC
+------------------------------------------------------------------------
+Naive (most frequent)          0.2190              —    0.5000
+Naive (per-role K rate)        0.2207              —    0.5048
+Logistic regression (default)   0.2822        +0.0615    0.5980
+Logistic regression (tuned)    0.2823        +0.0616    0.5981
+XGBoost (default)              0.2742        +0.0535    0.5882
+XGBoost (tuned)                0.2839        +0.0632    0.5999
+------------------------------------------------------------------------
+(v3 LR untuned, for reference)   0.2820                   0.5977
+========================================================================
+
+Interpretation:
+  XGBoost (tuned) beats the best naive floor (Naive (per-role K rate), PR-AUC 0.2207) —
+  XGBoost (tuned) PR-AUC 0.2839.
+  vs v3's untuned LR (PR-AUC 0.2820): +0.0019 — flat, tuning didn't move this model much.
+  Winning model: XGBoost (tuned) — FLIPS this project's usual LR-over-trees pattern once fairly tuned; look closer before committing to a production model.
+  Per this project's own metrics convention (PR-AUC is a PA-grain triage filter,
+  not a decision metric): this result alone does not confirm or rule out a real
+  improvement — that verdict comes from the game-grain check below.
+========================================================================
+
+========================================================================
+GAME-GRAIN CHECK — batter-game "1+ strikeout" (same approach as v1-v5)
+========================================================================
+Rolling up XGBoost (tuned)'s val predictions...
+===========================================================================
+CALIBRATION TABLE
+===========================================================================
+     bucket     n  reliable  mean_pred  obs_hit_rate
+0.069–0.138 10527      True      0.120         0.126
+0.138–0.162 10526      True      0.150         0.153
+0.162–0.181 10526      True      0.171         0.166
+0.181–0.198 10527      True      0.189         0.193
+0.198–0.215 10526      True      0.206         0.210
+0.215–0.232 10527      True      0.223         0.228
+0.232–0.251 10526      True      0.241         0.241
+0.251–0.275 10527      True      0.263         0.261
+0.275–0.309 10526      True      0.290         0.283
+0.309–0.608 10526      True      0.348         0.328
+
+===========================================================================
+CALIBRATION SUMMARY
+===========================================================================
+  ECE (expected calibration error) : 0.0056  (lower = better, 0 = perfect)
+  Reliability (calibration error)  : 0.0001  (lower = better)
+  Resolution (discriminative power): 0.0035  (higher = better)
+  Uncertainty (irreducible noise)  : 0.1711  (fixed by base rate)
+  Reconstructed Brier (rel-res+unc): 0.1676
+
+===========================================================================
+DISCRIMINATION METRICS
+===========================================================================
+  Decile cutoffs         : bottom 0.138 / top 0.309
+  Top-decile hit rate    : 0.328  (N=10527)  — 1.49x base rate
+  Bottom-decile hit rate : 0.126  (N=10527)  — 0.57x base rate
+  Spread                 : 0.202
+
+===========================================================================
+RANKING METRICS
+===========================================================================
+  ROC-AUC : 0.5999  (0.5 = random, 1.0 = perfect ranking)
+  PR-AUC  : 0.2839  (baseline = base rate ≈ 0.220; more informative than ROC-AUC given hits are the minority class)
+
+===========================================================================
+PROBABILITY SCORES
+===========================================================================
+  Model Brier    : 0.1676
+  Model LogLoss  : 0.5153
+===========================================================================
+CALIBRATION TABLE
+===========================================================================
+     bucket    n  reliable  mean_pred  obs_hit_rate
+0.097–0.284 4256      True      0.234         0.229
+0.284–0.339 4256      True      0.313         0.321
+0.339–0.378 4256      True      0.359         0.370
+0.378–0.412 4256      True      0.395         0.383
+0.412–0.446 4256      True      0.429         0.431
+0.446–0.480 4256      True      0.463         0.457
+0.480–0.517 4256      True      0.498         0.483
+0.517–0.561 4256      True      0.538         0.532
+0.561–0.618 4256      True      0.588         0.579
+0.618–0.878 4255      True      0.671         0.642
+
+===========================================================================
+CALIBRATION SUMMARY
+===========================================================================
+  ECE (expected calibration error) : 0.0103  (lower = better, 0 = perfect)
+  Reliability (calibration error)  : 0.0002  (lower = better)
+  Resolution (discriminative power): 0.0138  (higher = better)
+  Uncertainty (irreducible noise)  : 0.2467  (fixed by base rate)
+  Reconstructed Brier (rel-res+unc): 0.2331
+
+===========================================================================
+DISCRIMINATION METRICS
+===========================================================================
+  Decile cutoffs         : bottom 0.284 / top 0.618
+  Top-decile hit rate    : 0.642  (N=4256)  — 1.45x base rate
+  Bottom-decile hit rate : 0.229  (N=4256)  — 0.52x base rate
+  Spread                 : 0.412
+
+===========================================================================
+RANKING METRICS
+===========================================================================
+  ROC-AUC : 0.6367  (0.5 = random, 1.0 = perfect ranking)
+  PR-AUC  : 0.5646  (baseline = base rate ≈ 0.443; more informative than ROC-AUC given hits are the minority class)
+
+===========================================================================
+PROBABILITY SCORES
+===========================================================================
+  Model Brier    : 0.2328
+  Model LogLoss  : 0.6576
+
+105265 PA rows -> 42560 batter-game rows (mean 2.47 PA/game)
+
+###########################################################################
+# HEADLINE COMPARISON: PA GRAIN vs GAME GRAIN
+###########################################################################
+  reliability   PA=0.0001   GAME=0.0002
+  resolution    PA=0.0035   GAME=0.0138
+  roc_auc       PA=0.5999   GAME=0.6367
+  brier         PA=0.1676   GAME=0.2328
+  log_loss      PA=0.5153   GAME=0.6576
+  ece           PA=0.0056   GAME=0.0103
+===========================================================================
+CALIBRATION TABLE
+===========================================================================
+     bucket     n  reliable  mean_pred  obs_hit_rate
+0.203–0.390  2404      True      0.241         0.242
+0.390–0.390     0     False        NaN           NaN
+0.390–0.390     0     False        NaN           NaN
+0.390–0.390     0     False        NaN           NaN
+0.390–0.514 18551      True      0.391         0.405
+0.514–0.514     0     False        NaN           NaN
+0.514–0.514     0     False        NaN           NaN
+0.514–0.524  9227      True      0.514         0.509
+0.524–0.524     0     False        NaN           NaN
+0.524–0.698 12374      True      0.528         0.489
+
+  Warning: 6 bucket(s) below min_n=200 — treat with caution
+
+===========================================================================
+CALIBRATION SUMMARY
+===========================================================================
+  ECE (expected calibration error) : 0.0186  (lower = better, 0 = perfect)
+  Reliability (calibration error)  : 0.0005  (lower = better)
+  Resolution (discriminative power): 0.0045  (higher = better)
+  Uncertainty (irreducible noise)  : 0.2467  (fixed by base rate)
+  Reconstructed Brier (rel-res+unc): 0.2428
+
+===========================================================================
+DISCRIMINATION METRICS
+===========================================================================
+  Decile cutoffs         : bottom 0.390 / top 0.524
+  Top-decile hit rate    : 0.489  (N=12378)  — 1.11x base rate
+  Bottom-decile hit rate : 0.386  (N=20896)  — 0.87x base rate
+  Spread                 : 0.104
+
+===========================================================================
+RANKING METRICS
+===========================================================================
+  ROC-AUC : 0.5626  (0.5 = random, 1.0 = perfect ranking)
+  PR-AUC  : 0.4766  (baseline = base rate ≈ 0.443; more informative than ROC-AUC given hits are the minority class)
+
+===========================================================================
+PROBABILITY SCORES
+===========================================================================
+  Model Brier    : 0.2426
+  Model LogLoss  : 0.6779
+
+105,265 PAs -> 42,560 batter-game rows (mean 2.47 PA/game)
+Batter-game strikeout rate (1+ K): 0.443
+
+Metric           Naive (per-role)        XGBoost (tuned)
+reliability                0.0005                 0.0002
+resolution                 0.0045                 0.0138
+roc_auc                    0.5626                 0.6367
+brier                      0.2426                 0.2328
+log_loss                   0.6779                 0.6576
+ece                        0.0186                 0.0103
+
+Verdict vs naive at game grain: real_improvement
+  reliability delta: -0.0004 (lower=better, negative=more honest)
+  resolution delta:  +0.0093 (higher=better, positive=more real spread)
+
+  (v3's untuned game-grain result, for reference: reliability 0.0002, resolution 0.0133, verdict real_improvement)
+========================================================================
+Saved /Users/clumanlan/projects/mlb/src/models/k_predictor/experiments/v14_platoon_matchup/plots/game_grain_calibration.png
+
+Saved /Users/clumanlan/projects/mlb/src/models/k_predictor/experiments/v14_platoon_matchup/plots/target_distribution.png
+Saved /Users/clumanlan/projects/mlb/src/models/k_predictor/experiments/v14_platoon_matchup/plots/confusion_matrix.png
+Saved /Users/clumanlan/projects/mlb/src/models/k_predictor/experiments/v14_platoon_matchup/plots/feature_importance.png
+
+Logged all runs to MLflow (experiment: k_predictor).

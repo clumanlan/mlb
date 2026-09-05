@@ -10,7 +10,7 @@ from shared.model_dashboard.logic.calibration import reliability_bins
 from shared.model_dashboard.logic.contribution import compute_contribution
 from shared.model_dashboard.logic.metrics import per_row_loss
 from shared.model_dashboard.logic.missing import missing_value_report
-from shared.model_dashboard.logic.slicing import generate_interaction_slices, generate_single_slices
+from shared.model_dashboard.logic.slicing import generate_interaction_slices, generate_single_slices, slice_mask
 from shared.model_dashboard.plots.distribution import build_distribution_figure
 from shared.model_dashboard.plots.feature_vs_outcome import build_feature_vs_outcome_figure
 from shared.model_dashboard.plots.forest import build_forest_figure
@@ -20,14 +20,7 @@ from shared.model_dashboard.plots.time_series import build_time_series_figure
 
 
 def _get_slice_df(df: pd.DataFrame, feature: str, value) -> pd.DataFrame:
-    if "×" in str(feature):
-        cols = str(feature).split("×")
-        vals = str(value).split("×")
-        mask = pd.Series(True, index=df.index)
-        for col, val in zip(cols, vals):
-            mask &= df[col].astype(str) == val
-        return df[mask]
-    return df[df[feature].astype(str) == str(value)]
+    return df[slice_mask(df, feature, value)]
 
 
 @st.cache_data
@@ -188,6 +181,25 @@ def run_dashboard(config: dict) -> None:
             ]
         top_loss_df = loss_df.sort_values("_loss", ascending=False).head(20)
         render_top_losses_table(top_loss_df)
+
+        st.divider()
+
+        st.subheader("Most confident predictions")
+        render_description(
+            what="The 20 rows the model is most and least confident will be positive.",
+            why="Separate from top losses: this shows where the model stakes its highest confidence,"
+                " right or wrong — the rows a betting strategy would lean on hardest.",
+            read=f"Compare {target_col} against pred_prob in each table. A wrong row here (confident"
+                 " but target disagrees) is a bigger red flag than an ordinary miss, since the model"
+                 " isn't hedging at all.",
+        )
+        conf_c1, conf_c2 = st.columns(2)
+        with conf_c1:
+            st.caption(f"Highest pred_prob (most confident {target_col}=1)")
+            render_top_losses_table(df.sort_values(pred_col, ascending=False).head(20))
+        with conf_c2:
+            st.caption(f"Lowest pred_prob (most confident {target_col}=0)")
+            render_top_losses_table(df.sort_values(pred_col, ascending=True).head(20))
 
         st.divider()
 

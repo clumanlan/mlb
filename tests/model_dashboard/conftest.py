@@ -30,3 +30,27 @@ def biased_slice_data():
     return pd.DataFrame({
         "is_hit": is_hit, "pred_prob": pred_prob, "batSide": bat_side,
     })
+
+
+@pytest.fixture
+def biased_interaction_data():
+    """Data where batSide=L AND pitcher_hand=R jointly is a clearly biased
+    slice, but neither column alone carries the signal (each is 50/50
+    independent of is_hit) -- interaction-only signal. Used to verify
+    generate_interaction_slices + compute_contribution mask on the
+    conjunction of both columns, not just the first."""
+    rng = np.random.default_rng(7)
+    n = 2000
+    bat_side = rng.choice(["L", "R"], size=n)
+    pitcher_hand = rng.choice(["L", "R"], size=n)
+    is_hit = rng.binomial(1, 0.3, size=n)
+    is_target_combo = (bat_side == "L") & (pitcher_hand == "R")
+    pred_prob = np.where(
+        is_target_combo,
+        rng.uniform(0.7, 0.9, size=n),
+        rng.uniform(0.2, 0.4, size=n),
+    )
+    return pd.DataFrame({
+        "is_hit": is_hit, "pred_prob": pred_prob,
+        "batSide": bat_side, "pitcher_hand": pitcher_hand,
+    })

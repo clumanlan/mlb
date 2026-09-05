@@ -35,3 +35,28 @@ def build_pitcher_shrunk_whip(
     df['pitcher_shrunk_whip'] = (1 - weight) * baseline + weight * rolling_safe
 
     return df
+
+
+def build_pitcher_projected_workload(
+    df, position_col: str = 'estimated_team_pa_position',
+    pace_col: str = 'pitcher_roll_last3g_pa_pitch_count_mean',
+    out_col: str = 'pitcher_projected_pitches_before_pa',
+):
+    """Projects how many pitches the pitcher has thrown BEFORE this PA:
+    (batters faced before this PA) * (pitches per PA, trailing-3-game pace).
+
+    estimated_team_pa_position is this PA's 1-indexed slot in the game (see
+    pipeline.py's _add_estimated_team_pa_position) -- position - 1 batters
+    have been faced already. Pre-game-knowable for the same reason
+    expected_role.py already treats estimated_team_pa_position/batter_pa_number
+    as safe to use directly: both are a deterministic function of
+    batting_order (known before first pitch), not a leaked realized outcome.
+
+    Sharper fatigue signal than PA-position or times_through_order alone --
+    two batters at the same slot can represent very different actual
+    workload depending on how many pitches the pitcher's been burning per
+    batter (deep counts, foul balls, working around traffic).
+    """
+    df = df.copy()
+    df[out_col] = (df[position_col] - 1) * df[pace_col]
+    return df

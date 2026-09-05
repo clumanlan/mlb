@@ -54,6 +54,9 @@ env/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
+# Node.js
+node_modules/
+
 # macOS
 .DS_Store
 

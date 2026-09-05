@@ -1,0 +1,756 @@
+"""
+k_predictor experiment v14: adds platoon_matchup (same_hand/opposite_hand/
+switch_hitter) to v6's tuned feature set.
+Run from src/models/k_predictor/ with: python experiments/v14_platoon_matchup/train.py
+Requires AWS credentials with read access to s3://mlbdk (us-east-2).
+"""
+# ---------------------------------------------------------------------------- #
+#                                   v14 SUMMARY                                #
+# ---------------------------------------------------------------------------- #
+# v6 (tuned XGBoost) is the standing production candidate; v7-v13 each tried a
+# different fix (new data, a new grain) and all came back flat or worse -- see
+# ROADMAP.md. A slice diagnostic on v6's real-odds backtest found a
+# statistically significant (bootstrap-CI, not noise) calibration gap on the
+# same-hand platoon slice, even though v6 already has pitcher_throw_hand and
+# batter_bat_side as two separately-encoded (OrdinalEncoder) categorical
+# features. This is a different failure mode than "missing data": the raw
+# ingredients are already in FEATURE_COLS, but "same-hand matchup" is the
+# condition throw_hand_code == bat_side_code -- not a threshold split a
+# shallow tree can express directly on two separately-encoded columns without
+# many boosting rounds spent approximating it.
+#
+# v14 tests the cheap fix: process/pipeline.py's create_pa_outcome_strikeout
+# now derives an explicit platoon_matchup column (same_hand/opposite_hand/
+# switch_hitter), mirroring hit_predictor's own slice_diagnostic.py
+# derivation. Added here ADDITIVELY to v6's FEATURE_COLS -- the two raw hand
+# columns stay, platoon_matchup is a third, explicit interaction column.
+# Everything else (data, tuning grids, eval) is identical to v6_tuned/train.py
+# so the delta is attributable to this one feature.
+# ---------------------------------------------------------------------------- #
+import yaml
+from datetime import datetime
+from pathlib import Path
+
+import awswrangler as wr
+import boto3
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from sklearn.dummy import DummyClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.metrics import roc_auc_score, average_precision_score, ConfusionMatrixDisplay, confusion_matrix
+
+import os
+os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+import mlflow
+mlflow.set_tracking_uri("file:./mlruns")
+from models.k_predictor.utils.mlflow_logging import log_evaluation_to_mlflow, get_git_sha
+
+import models.hit_predictor.processing.pipeline as hp_pipeline
+from models.hit_predictor.processing.features import season_stats
+from models.hit_predictor.processing.features import rolling_stats
+from models.hit_predictor.processing.features import expected_role
+from models.hit_predictor.utils.eval import (
+    run_pa_vs_game_grain_check, aggregate_pa_predictions_to_game,
+    evaluate_hit_predictor, summarize_verdict, plot_calibration_curve,
+)
+
+import models.k_predictor.processing.pipeline as pipeline
+from models.k_predictor.processing.features.pitcher_workload import build_pitcher_shrunk_whip
+
+STAGE = Path(__file__).parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+WHIP_SHRINKAGE_K = 20.0
+SHORT_PITCHER_WINDOW = 3   # trailing-3-start pitcher form
+SHORT_TEAM_WINDOW = 5      # trailing-5-game opposing-lineup volatility
+
+pd.set_option('display.max_columns', None)
+
+
+# ── 1. Config ────────────────────────────────────────────────────────────────
+with open(BASE_DIR / "config.yaml") as f:
+    cfg = yaml.safe_load(f)
+
+BUCKET          = cfg["bucket"]
+REGION          = cfg["region"]
+TRAIN_SEASONS   = cfg["train_seasons"]
+FEATURE_SEASONS = cfg["feature_seasons"]
+TARGET          = cfg["target_column"]
+DATE_COL        = cfg["date_column"]
+TEST_SEASON     = cfg["test_season"]
+VAL_SEASON      = cfg["val_season"]
+MODEL_NAME      = cfg["model_name"]
+
+FIT_SEASONS = [s for s in TRAIN_SEASONS if s not in (VAL_SEASON, TEST_SEASON)]
+FIT_SEASONS.remove(2017)  # same reason as baseline/hit_predictor — needs a prior season's pbp for the shift
+
+boto_session = boto3.Session(region_name=REGION)
+all_boxscore_seasons = sorted(set(FEATURE_SEASONS + TRAIN_SEASONS))
+
+
+# ── 2. Load data from S3 ─────────────────────────────────────────────────────
+def read_parquet_seasons(path_tpl, seasons, chunked=False):
+    frames = []
+    for season in seasons:
+        path = path_tpl.format(bucket=BUCKET, season=season)
+        print(f"  {path}")
+        if chunked:
+            for chunk in wr.s3.read_parquet(path=path, chunked=True, boto3_session=boto_session):
+                if "spin_direction" in chunk.columns:
+                    chunk["spin_direction"] = chunk["spin_direction"].astype("float64")
+                frames.append(chunk)
+        else:
+            frames.append(wr.s3.read_parquet(path=path, boto3_session=boto_session))
+    return pd.concat(frames, ignore_index=True)
+
+
+print("\nLoading play-by-play...")
+pbp = read_parquet_seasons(
+    "s3://{bucket}/processed_data/prepared/playbyplay/{season}/", TRAIN_SEASONS, chunked=True,
+)
+
+print("\nLoading schedule...")
+schedule = read_parquet_seasons(
+    "s3://{bucket}/processed_data/games/schedule/{season}/", all_boxscore_seasons,
+)
+
+print("\nLoading game info...")
+game_info = read_parquet_seasons(
+    "s3://{bucket}/processed_data/games/game_info/{season}/", TRAIN_SEASONS,
+)
+
+print("\nLoading batter boxscore...")
+batter_boxscore = read_parquet_seasons(
+    "s3://{bucket}/processed_data/prepared/batter_boxscore/{season}/", all_boxscore_seasons,
+)
+
+print("\nLoading pitcher boxscore...")
+pitcher_boxscore = read_parquet_seasons(
+    "s3://{bucket}/processed_data/prepared/pitcher_boxscore/{season}/", all_boxscore_seasons,
+)
+
+print("\nLoading player info...")
+player_info = wr.s3.read_parquet(
+    path=f"s3://{BUCKET}/raw_data/reference/player_info/", boto3_session=boto_session,
+)
+
+
+# ── 3. Build PA-grain DataFrame ───────────────────────────────────────────────
+print("\nBuilding PA-grain DataFrame...")
+
+schedule = hp_pipeline.process_schedule(schedule)
+game_info = hp_pipeline.process_game_info(game_info)
+pitcher_boxscore = hp_pipeline.process_pitcher_boxscore(pitcher_boxscore)
+pbp = pipeline.build_pbp_features_strikeout(pbp, schedule, player_info)
+
+pa_outcome = pipeline.create_pa_outcome_strikeout(pbp, batter_boxscore, game_info, schedule)
+pa_outcome["game_season"] = pa_outcome["game_date"].dt.year
+
+# ------------------------- EXPECTED (PRE-GAME) PITCHER ROLE ------------------ #
+pitcher_start_depth_stats = season_stats.build_pitcher_start_depth_stats(pbp)
+league_avg_start_depth = season_stats.build_league_avg_start_depth(pitcher_start_depth_stats)
+pa_outcome = expected_role.assign_expected_pitcher_role(
+    pa_outcome, pitcher_start_depth_stats, league_avg_start_depth
+)
+assert "expected_times_through_order" in pa_outcome.columns, (
+    "expected_role.assign_expected_pitcher_role should already produce this column"
+)
+
+# ------------------------- 1. SEASON (LAST SEASON) --------------------------- #
+pitcher_role_season_stats = season_stats.build_pbp_pitcher_feats_all_roles(pbp)[
+    ["pitcher_key_id", "pitcher_role", "game_season", "pitcher_last_season_pa_strikeout_rate"]
+].rename(columns={"pitcher_key_id": "expected_pitcher_key_id", "pitcher_role": "expected_pitcher_role"})
+
+pitcher_box_season_stats = season_stats.build_pitcher_stats_all_roles(pitcher_boxscore, pbp)[
+    ["pitcher_key_id", "pitcher_role", "game_season", "pitcher_last_season_whip"]
+].rename(columns={"pitcher_key_id": "expected_pitcher_key_id", "pitcher_role": "expected_pitcher_role"})
+
+batter_season_stats = season_stats.build_pbp_batter_feats(pbp)[
+    ["batter_id", "game_season", "batter_last_season_pa_strikeout_rate"]
+]
+
+pa_outcome = pa_outcome.merge(
+    pitcher_role_season_stats, on=["game_season", "expected_pitcher_key_id", "expected_pitcher_role"], how="left",
+)
+pa_outcome = pa_outcome.merge(
+    pitcher_box_season_stats, on=["game_season", "expected_pitcher_key_id", "expected_pitcher_role"], how="left",
+)
+pa_outcome = pa_outcome.merge(batter_season_stats, on=["game_season", "batter_id"], how="left")
+
+# ------------------------- 2. ROLLING RAW (THIS SEASON, from v1/v2) ---------- #
+pitcher_box_rolling = rolling_stats.build_pitcher_rolling_stats_all_roles(pitcher_boxscore, pbp, window="season")
+box_rolling_cols = [
+    "pitcher_roll_season_ip", "pitcher_roll_season_whip", "pitcher_roll_season_k_rate",
+    "pitcher_roll_season_bb_rate", "pitcher_roll_season_hr_rate", "pitcher_roll_season_games_n",
+]
+pa_outcome = pa_outcome.merge(
+    pitcher_box_rolling.rename(columns={"pitcher_key_id": "expected_pitcher_key_id", "pitcher_role": "expected_pitcher_role"})[
+        ["gamepk", "expected_pitcher_key_id", "expected_pitcher_role"] + box_rolling_cols
+    ],
+    on=["gamepk", "expected_pitcher_key_id", "expected_pitcher_role"], how="left",
+)
+
+pitcher_pbp_rolling = rolling_stats.build_pbp_pitcher_rolling_feats_all_roles(pbp, window="season")
+pbp_rolling_cols = [
+    "pitcher_roll_season_pa_total", "pitcher_roll_season_pa_strikeout_rate",
+    # NEW in v3 (#3): already-computed rate columns, never selected before.
+    "pitcher_roll_season_command_swinging_strike_rate", "pitcher_roll_season_pa_pitch_count_mean",
+]
+pa_outcome = pa_outcome.merge(
+    pitcher_pbp_rolling.rename(columns={"pitcher_key_id": "expected_pitcher_key_id", "pitcher_role": "expected_pitcher_role"})[
+        ["gamepk", "expected_pitcher_key_id", "expected_pitcher_role"] + pbp_rolling_cols
+    ],
+    on=["gamepk", "expected_pitcher_key_id", "expected_pitcher_role"], how="left",
+)
+
+pa_outcome["pitcher_roll_season_avg_ip_per_game"] = (
+    pa_outcome["pitcher_roll_season_ip"] / pa_outcome["pitcher_roll_season_games_n"].replace(0, np.nan)
+)
+
+batter_pbp_rolling = rolling_stats.build_pbp_batter_rolling_feats(pbp, window="season")
+pa_outcome = pa_outcome.merge(
+    batter_pbp_rolling[["batter_id", "gamepk", "batter_roll_season_pa_strikeout_rate"]],
+    on=["batter_id", "gamepk"], how="left",
+)
+
+team_batter_rolling = rolling_stats.build_team_batter_strikeout_rolling_feats(
+    pbp, batter_boxscore, window="season"
+)
+opp_team_rolling = team_batter_rolling.rename(columns={
+    "team_roll_season_pa_strikeout_rate": "opp_team_roll_season_pa_strikeout_rate",
+})[["batter_team_id", "gamepk", "opp_team_roll_season_pa_strikeout_rate"]]
+pa_outcome = pa_outcome.merge(opp_team_rolling, on=["batter_team_id", "gamepk"], how="left")
+
+pitching_team_rolling = team_batter_rolling.rename(columns={
+    "batter_team_id": "pitcher_team_id",
+    "team_roll_season_pa_strikeout_rate": "pitching_team_roll_season_pa_strikeout_rate",
+})[["pitcher_team_id", "gamepk", "pitching_team_roll_season_pa_strikeout_rate"]]
+pa_outcome = pa_outcome.merge(pitching_team_rolling, on=["pitcher_team_id", "gamepk"], how="left")
+
+# ------------------------- 2b. TRAILING-3-START PITCHER FORM (NEW in v3, #1) - #
+# Same builders as above, called with a short int window instead of 'season' —
+# carries across the season boundary (see build_pitcher_rolling_stats_all_roles/
+# build_pbp_pitcher_rolling_feats_all_roles' own window=<int> behavior, already
+# tested). Captures recent hot/cold form a season-long average smooths away.
+pitcher_box_rolling3 = rolling_stats.build_pitcher_rolling_stats_all_roles(
+    pitcher_boxscore, pbp, window=SHORT_PITCHER_WINDOW,
+)
+box_rolling3_cols = [
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_ip", f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_whip",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_k_rate", f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_bb_rate",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_hr_rate", f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_games_n",
+]
+pa_outcome = pa_outcome.merge(
+    pitcher_box_rolling3.rename(columns={"pitcher_key_id": "expected_pitcher_key_id", "pitcher_role": "expected_pitcher_role"})[
+        ["gamepk", "expected_pitcher_key_id", "expected_pitcher_role"] + box_rolling3_cols
+    ],
+    on=["gamepk", "expected_pitcher_key_id", "expected_pitcher_role"], how="left",
+)
+
+pitcher_pbp_rolling3 = rolling_stats.build_pbp_pitcher_rolling_feats_all_roles(pbp, window=SHORT_PITCHER_WINDOW)
+pbp_rolling3_cols = [
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_pa_total", f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_pa_strikeout_rate",
+    # NEW in v3 (#3): trailing-window whiff rate + pitch efficiency.
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_command_swinging_strike_rate",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_pa_pitch_count_mean",
+]
+pa_outcome = pa_outcome.merge(
+    pitcher_pbp_rolling3.rename(columns={"pitcher_key_id": "expected_pitcher_key_id", "pitcher_role": "expected_pitcher_role"})[
+        ["gamepk", "expected_pitcher_key_id", "expected_pitcher_role"] + pbp_rolling3_cols
+    ],
+    on=["gamepk", "expected_pitcher_key_id", "expected_pitcher_role"], how="left",
+)
+
+pa_outcome[f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_avg_ip_per_game"] = (
+    pa_outcome[f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_ip"]
+    / pa_outcome[f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_games_n"].replace(0, np.nan)
+)
+
+# ------------------------- 2c. OPPOSING-TEAM K-RATE VOLATILITY (NEW in v3, #2) #
+# Level (opp_team_roll_season_pa_strikeout_rate above) already exists from v2;
+# this adds the team's own K-rate CEILING/volatility at both a long (season)
+# and short (trailing-5-game) window.
+opp_team_volatility_season = rolling_stats.build_team_strikeout_volatility(pbp, batter_boxscore, window="season")
+opp_team_volatility_season_cols = [
+    "team_roll_season_pa_strikeout_rate_mean", "team_roll_season_pa_strikeout_rate_std",
+    "team_roll_season_pa_strikeout_rate_max",
+]
+pa_outcome = pa_outcome.merge(
+    opp_team_volatility_season.rename(columns={
+        "team_roll_season_pa_strikeout_rate_mean": "opp_team_roll_season_pa_strikeout_rate_mean",
+        "team_roll_season_pa_strikeout_rate_std": "opp_team_roll_season_pa_strikeout_rate_std",
+        "team_roll_season_pa_strikeout_rate_max": "opp_team_roll_season_pa_strikeout_rate_max",
+    })[["batter_team_id", "gamepk", "opp_team_roll_season_pa_strikeout_rate_mean",
+        "opp_team_roll_season_pa_strikeout_rate_std", "opp_team_roll_season_pa_strikeout_rate_max"]],
+    on=["batter_team_id", "gamepk"], how="left",
+)
+
+opp_team_volatility_short = rolling_stats.build_team_strikeout_volatility(pbp, batter_boxscore, window=SHORT_TEAM_WINDOW)
+short_team_prefix = f"team_roll_last{SHORT_TEAM_WINDOW}g_pa_strikeout_rate"
+pa_outcome = pa_outcome.merge(
+    opp_team_volatility_short.rename(columns={
+        f"{short_team_prefix}_mean": f"opp_{short_team_prefix}_mean",
+        f"{short_team_prefix}_std": f"opp_{short_team_prefix}_std",
+        f"{short_team_prefix}_max": f"opp_{short_team_prefix}_max",
+    })[["batter_team_id", "gamepk", f"opp_{short_team_prefix}_mean",
+        f"opp_{short_team_prefix}_std", f"opp_{short_team_prefix}_max"]],
+    on=["batter_team_id", "gamepk"], how="left",
+)
+
+# ------------------------- 3. ROLLING SHRUNK TO LAST SEASON ------------------ #
+shrunk_whip = build_pitcher_shrunk_whip(
+    pitcher_box_rolling, season_stats.build_pitcher_stats_all_roles(pitcher_boxscore, pbp),
+    window="season", k=WHIP_SHRINKAGE_K,
+)
+shrunk_whip_cols = ["pitcher_shrunk_whip", "pitcher_shrunk_whip_weight"]
+pa_outcome = pa_outcome.merge(
+    shrunk_whip.rename(columns={"pitcher_key_id": "expected_pitcher_key_id", "pitcher_role": "expected_pitcher_role"})[
+        ["gamepk", "expected_pitcher_key_id", "expected_pitcher_role"] + shrunk_whip_cols
+    ],
+    on=["gamepk", "expected_pitcher_key_id", "expected_pitcher_role"], how="left",
+)
+
+
+# ── 4. Season-based train / val / test split ─────────────────────────────────
+FEATURE_COLS = [
+    "expected_pitcher_role",
+    "pitcher_throw_hand",
+    "batter_bat_side",
+    "platoon_matchup",  # NEW in v14: explicit same_hand/opposite_hand/switch_hitter interaction
+    # 1. season (last season)
+    "pitcher_last_season_pa_strikeout_rate",
+    "pitcher_last_season_whip",
+    "batter_last_season_pa_strikeout_rate",
+    # 2. rolling raw (this season) — pitcher side, from v1
+    "pitcher_roll_season_ip",
+    "pitcher_roll_season_whip",
+    "pitcher_roll_season_k_rate",
+    "pitcher_roll_season_bb_rate",
+    "pitcher_roll_season_hr_rate",
+    "pitcher_roll_season_games_n",
+    "pitcher_roll_season_avg_ip_per_game",
+    "pitcher_roll_season_pa_total",
+    "pitcher_roll_season_pa_strikeout_rate",
+    # 2b. rolling raw (this season) — batter + team side, from v2
+    "batter_roll_season_pa_strikeout_rate",
+    "opp_team_roll_season_pa_strikeout_rate",
+    "pitching_team_roll_season_pa_strikeout_rate",
+    # 2c. trailing-3-start pitcher form, NEW in v3 (#1)
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_ip",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_whip",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_k_rate",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_bb_rate",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_hr_rate",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_games_n",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_avg_ip_per_game",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_pa_total",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_pa_strikeout_rate",
+    # 2d. opposing-team K-rate volatility, NEW in v3 (#2) — season + trailing-5
+    "opp_team_roll_season_pa_strikeout_rate_mean",
+    "opp_team_roll_season_pa_strikeout_rate_std",
+    "opp_team_roll_season_pa_strikeout_rate_max",
+    f"opp_{short_team_prefix}_mean",
+    f"opp_{short_team_prefix}_std",
+    f"opp_{short_team_prefix}_max",
+    # 2e. whiff rate + pitch efficiency, NEW in v3 (#3) — season + trailing-3
+    "pitcher_roll_season_command_swinging_strike_rate",
+    "pitcher_roll_season_pa_pitch_count_mean",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_command_swinging_strike_rate",
+    f"pitcher_roll_last{SHORT_PITCHER_WINDOW}g_pa_pitch_count_mean",
+    # 3. rolling shrunk to last season
+    "pitcher_shrunk_whip",
+    "pitcher_shrunk_whip_weight",
+    # 4. game context, from v2
+    "weather_condition",
+    "weather_temp",
+    "expected_times_through_order",
+]
+FEATURE_COLS = [c for c in FEATURE_COLS if c in pa_outcome.columns]
+
+NAIVE_ROLE_COL = "expected_pitcher_role"
+
+GAME_GRAIN_KEY_COLS = ["gamepk", "batter_id"]  # grouping keys for the game-grain check below, not features
+model_df = pa_outcome[FEATURE_COLS + [TARGET, DATE_COL, "game_season"] + GAME_GRAIN_KEY_COLS].copy()
+model_df["game_season"] = model_df["game_season"].astype(int)
+
+train_df = model_df[model_df["game_season"].isin(FIT_SEASONS)].copy()
+val_df   = model_df[model_df["game_season"] == VAL_SEASON].copy()
+test_df  = model_df[model_df["game_season"] == TEST_SEASON].copy()  # never evaluated here
+
+print(f"\nFit seasons:  {FIT_SEASONS}")
+print(f"Val season:   {VAL_SEASON}  ← iterate against this")
+print(f"Test season:  {TEST_SEASON} ← locked away, not evaluated here")
+print(f"Feature count: {len(FEATURE_COLS)} (v6's 42 + platoon_matchup)")
+print(f"Strikeout rate — train: {train_df[TARGET].mean():.3f}  val: {val_df[TARGET].mean():.3f}")
+
+X_train = train_df[FEATURE_COLS]
+y_train = train_df[TARGET]
+X_val   = val_df[FEATURE_COLS]
+y_val   = val_df[TARGET]
+
+num_cols = [c for c in FEATURE_COLS if pd.api.types.is_numeric_dtype(X_train[c])]
+cat_cols = [c for c in FEATURE_COLS if c not in num_cols]
+
+
+def encode(X_tr, X_ev, cat_cols, num_cols):
+    X_tr = X_tr.copy()
+    X_ev = X_ev.copy()
+
+    if num_cols:
+        X_tr[num_cols] = X_tr[num_cols].apply(pd.to_numeric, errors="coerce")
+        X_ev[num_cols] = X_ev[num_cols].apply(pd.to_numeric, errors="coerce")
+    if cat_cols:
+        X_tr[cat_cols] = X_tr[cat_cols].astype(object).fillna(np.nan)
+        X_ev[cat_cols] = X_ev[cat_cols].astype(object).fillna(np.nan)
+
+    num_imp = SimpleImputer(strategy="median")
+    Xtr_num = num_imp.fit_transform(X_tr[num_cols]) if num_cols else np.empty((len(X_tr), 0))
+    Xev_num = num_imp.transform(X_ev[num_cols])     if num_cols else np.empty((len(X_ev), 0))
+
+    if cat_cols:
+        cat_imp = SimpleImputer(strategy="most_frequent")
+        Xtr_cat_imp = cat_imp.fit_transform(X_tr[cat_cols])
+        Xev_cat_imp = cat_imp.transform(X_ev[cat_cols])
+        enc = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
+        Xtr_cat = enc.fit_transform(Xtr_cat_imp)
+        Xev_cat = enc.transform(Xev_cat_imp)
+    else:
+        Xtr_cat = np.empty((len(X_tr), 0))
+        Xev_cat = np.empty((len(X_ev), 0))
+
+    return np.hstack([Xtr_num, Xtr_cat]), np.hstack([Xev_num, Xev_cat])
+
+
+Xtr, Xval = encode(X_train, X_val, cat_cols, num_cols)
+
+
+# ── 5. Train models, evaluate on val ─────────────────────────────────────────
+results = {}
+
+
+def _eval(name, y_true, y_prob):
+    y_pred = (y_prob >= 0.5).astype(int)
+    results[name] = {
+        "roc_auc": roc_auc_score(y_true, y_prob),
+        "pr_auc": average_precision_score(y_true, y_prob),
+        "prob": y_prob,
+        "pred": y_pred,
+    }
+
+
+print("\nEvaluating naive (most frequent class)...")
+naive_global = DummyClassifier(strategy="most_frequent")
+naive_global.fit(Xtr, y_train)
+_eval("Naive (most frequent)", y_val, naive_global.predict_proba(Xval)[:, 1])
+
+print("Evaluating naive (per expected-pitcher-role K rate)...")
+role_rate = train_df.groupby(NAIVE_ROLE_COL)[TARGET].mean()
+naive_role_pred = X_val[NAIVE_ROLE_COL].map(role_rate).fillna(y_train.mean())
+_eval("Naive (per-role K rate)", y_val, naive_role_pred.to_numpy())
+
+# ------------------------- LOGISTIC REGRESSION: grid search ------------------ #
+# C x penalty x class_weight, scored on the untouched VAL_SEASON (season-based
+# split, not k-fold, matching this project's own convention everywhere else --
+# a random fold would leak future-season information into training).
+print("\nTuning logistic regression (C x penalty x class_weight)...")
+scaler = StandardScaler()
+Xtr_sc = scaler.fit_transform(Xtr)
+Xval_sc = scaler.transform(Xval)
+
+LR_GRID = {"C": [0.001, 0.01, 0.1, 1.0, 10.0, 100.0], "penalty": ["l1", "l2"], "class_weight": [None, "balanced"]}
+lr_search_results = []
+best_lr, best_lr_pr_auc, best_lr_config = None, -1.0, None
+for C in LR_GRID["C"]:
+    for penalty in LR_GRID["penalty"]:
+        for class_weight in LR_GRID["class_weight"]:
+            model = LogisticRegression(C=C, penalty=penalty, class_weight=class_weight, solver="liblinear", max_iter=2000)
+            model.fit(Xtr_sc, y_train)
+            prob = model.predict_proba(Xval_sc)[:, 1]
+            pr_auc, roc_auc = average_precision_score(y_val, prob), roc_auc_score(y_val, prob)
+            lr_search_results.append({"C": C, "penalty": penalty, "class_weight": class_weight, "pr_auc": pr_auc, "roc_auc": roc_auc})
+            if pr_auc > best_lr_pr_auc:
+                best_lr, best_lr_pr_auc = model, pr_auc
+                best_lr_config = {"C": C, "penalty": penalty, "class_weight": class_weight}
+
+lr_search_df = pd.DataFrame(lr_search_results).sort_values("pr_auc", ascending=False)
+print(f"Top 5 of {len(lr_search_df)} LR configs by val PR-AUC:")
+print(lr_search_df.head(5).to_string(index=False))
+print(f"Best LR config: {best_lr_config} -> PR-AUC {best_lr_pr_auc:.4f}")
+
+_eval("Logistic regression (default)", y_val, LogisticRegression(max_iter=1000).fit(Xtr_sc, y_train).predict_proba(Xval_sc)[:, 1])
+_eval("Logistic regression (tuned)", y_val, best_lr.predict_proba(Xval_sc)[:, 1])
+
+# ------------------------- XGBOOST: grid search with early stopping ---------- #
+# batters_faced_predictor's own history: default XGBoost hyperparameters
+# badly overfit at this repo's ~15-20k-20k-row data sizes, and a proper tune
+# (shallow trees, low learning rate, early stopping) swung its result from
+# clearly losing to a hand-tuned formula to clearly beating it -- LR has won
+# every classifier built in this project so far, but never against a fairly
+# tuned XGBoost. Early-stopped against the latest FIT_SEASON (held out of
+# training), final model selection still scored on the untouched VAL_SEASON.
+print("\nTuning XGBoost (max_depth x learning_rate, early-stopped)...")
+import xgboost as xgb
+
+EARLY_STOP_SEASON = max(FIT_SEASONS)
+CORE_FIT_SEASONS = [s for s in FIT_SEASONS if s != EARLY_STOP_SEASON]
+print(f"  Core fit seasons: {CORE_FIT_SEASONS}  |  early-stop season: {EARLY_STOP_SEASON}  |  final selection: {VAL_SEASON} (untouched by tuning)")
+
+core_train_df = train_df[train_df["game_season"].isin(CORE_FIT_SEASONS)]
+early_stop_df = train_df[train_df["game_season"] == EARLY_STOP_SEASON]
+
+
+def fit_transform_xgb(fit_df, *apply_dfs):
+    """Same imputation/encoding shape as encode() above, but fits once and
+    applies to multiple frames (core train, early-stop, final val) with the
+    SAME fitted imputers/encoder -- encode() only ever supports one (fit, eval)
+    pair per call."""
+    fit_df = fit_df[FEATURE_COLS].copy()
+    apply_dfs = [df[FEATURE_COLS].copy() for df in apply_dfs]
+    if num_cols:
+        fit_df[num_cols] = fit_df[num_cols].apply(pd.to_numeric, errors="coerce")
+        for df in apply_dfs:
+            df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce")
+    if cat_cols:
+        fit_df[cat_cols] = fit_df[cat_cols].astype(object).fillna(np.nan)
+        for df in apply_dfs:
+            df[cat_cols] = df[cat_cols].astype(object).fillna(np.nan)
+
+    num_imp_x = SimpleImputer(strategy="median")
+    Xfit_num = num_imp_x.fit_transform(fit_df[num_cols]) if num_cols else np.empty((len(fit_df), 0))
+    Xapply_num = [num_imp_x.transform(df[num_cols]) if num_cols else np.empty((len(df), 0)) for df in apply_dfs]
+
+    if cat_cols:
+        cat_imp_x = SimpleImputer(strategy="most_frequent")
+        Xfit_cat = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
+        Xfit_cat_imp = cat_imp_x.fit_transform(fit_df[cat_cols])
+        Xfit_cat_enc = Xfit_cat.fit_transform(Xfit_cat_imp)
+        Xapply_cat = [Xfit_cat.transform(cat_imp_x.transform(df[cat_cols])) for df in apply_dfs]
+    else:
+        Xfit_cat_enc = np.empty((len(fit_df), 0))
+        Xapply_cat = [np.empty((len(df), 0)) for df in apply_dfs]
+
+    Xfit = np.hstack([Xfit_num, Xfit_cat_enc])
+    Xapply = [np.hstack([n, c]) for n, c in zip(Xapply_num, Xapply_cat)]
+    return Xfit, Xapply
+
+
+Xcore, (Xearly, Xval_xgb) = fit_transform_xgb(core_train_df, early_stop_df, val_df)
+y_core, y_early = core_train_df[TARGET], early_stop_df[TARGET]
+
+XGB_GRID = {"max_depth": [2, 3, 4], "learning_rate": [0.01, 0.03, 0.1]}
+xgb_search_results = []
+best_xgb, best_xgb_pr_auc, best_xgb_config = None, -1.0, None
+for max_depth in XGB_GRID["max_depth"]:
+    for learning_rate in XGB_GRID["learning_rate"]:
+        model = xgb.XGBClassifier(
+            n_estimators=2000, max_depth=max_depth, learning_rate=learning_rate,
+            subsample=0.8, colsample_bytree=0.8, min_child_weight=5, reg_lambda=1.0,
+            random_state=42, verbosity=0, eval_metric="logloss", early_stopping_rounds=30,
+        )
+        model.fit(Xcore, y_core, eval_set=[(Xearly, y_early)], verbose=False)
+        prob = model.predict_proba(Xval_xgb)[:, 1]
+        pr_auc, roc_auc = average_precision_score(y_val, prob), roc_auc_score(y_val, prob)
+        xgb_search_results.append({
+            "max_depth": max_depth, "learning_rate": learning_rate,
+            "best_iteration": model.best_iteration, "pr_auc": pr_auc, "roc_auc": roc_auc,
+        })
+        if pr_auc > best_xgb_pr_auc:
+            best_xgb, best_xgb_pr_auc = model, pr_auc
+            best_xgb_config = {"max_depth": max_depth, "learning_rate": learning_rate, "best_iteration": model.best_iteration}
+
+xgb_search_df = pd.DataFrame(xgb_search_results).sort_values("pr_auc", ascending=False)
+print(f"All {len(xgb_search_df)} XGBoost configs by val PR-AUC:")
+print(xgb_search_df.to_string(index=False))
+print(f"Best XGBoost config: {best_xgb_config} -> PR-AUC {best_xgb_pr_auc:.4f}")
+
+# Default-hyperparameter XGBoost, refit on the full FIT_SEASONS (not just the
+# core split) -- the same fair-comparison point v1-v5 always reported.
+xgb_default = xgb.XGBClassifier(n_estimators=100, random_state=42, verbosity=0, eval_metric="logloss")
+xgb_default.fit(Xtr, y_train)
+_eval("XGBoost (default)", y_val, xgb_default.predict_proba(Xval)[:, 1])
+_eval("XGBoost (tuned)", y_val, best_xgb.predict_proba(Xval_xgb)[:, 1])
+
+xgb_model = best_xgb  # feature-importance plot below reads off the TUNED model
+
+
+# ── 6. Print results ──────────────────────────────────────────────────────────
+naive_pr_auc = results["Naive (most frequent)"]["pr_auc"]
+role_pr_auc = results["Naive (per-role K rate)"]["pr_auc"]
+best_naive_name, best_naive_pr_auc = max(
+    (("Naive (most frequent)", naive_pr_auc), ("Naive (per-role K rate)", role_pr_auc)),
+    key=lambda t: t[1],
+)
+
+# v3's own (untuned) results, hardcoded here for a direct comparison printout.
+V3_LR_PR_AUC = 0.2820
+V3_LR_ROC_AUC = 0.5977
+
+print(f"\n{'='*72}")
+print(f"EXPERIMENT RESULTS — {MODEL_NAME} v6 (hyperparameter-tuned, v3's feature set)")
+print(f"Evaluated on val season {VAL_SEASON} ({len(val_df):,} PAs)  |  Test season {TEST_SEASON} locked")
+print("Primary: PR-AUC (higher=better)  |  Secondary: ROC-AUC (higher=better)")
+print("=" * 72)
+print(f"{'Model':<28} {'PR-AUC':>8} {'vs best naive':>14}  {'ROC-AUC':>8}")
+print("-" * 72)
+for name, res in results.items():
+    delta = f"{res['pr_auc'] - best_naive_pr_auc:+.4f}" if name not in ("Naive (most frequent)", "Naive (per-role K rate)") else "—"
+    print(f"{name:<28} {res['pr_auc']:>8.4f} {delta:>14}  {res['roc_auc']:>8.4f}")
+print("-" * 72)
+print(f"{'(v3 LR untuned, for reference)':<28} {V3_LR_PR_AUC:>8.4f} {'':>14}  {V3_LR_ROC_AUC:>8.4f}")
+print("=" * 72)
+
+print("\nInterpretation:")
+candidates = {n: r for n, r in results.items() if n not in ("Naive (most frequent)", "Naive (per-role K rate)")}
+beats_floor = {n: r for n, r in candidates.items() if r["pr_auc"] > best_naive_pr_auc}
+best_name, best = max(candidates.items(), key=lambda t: t[1]["pr_auc"])
+
+if not beats_floor:
+    print(f"  No model beats the best naive floor ({best_naive_name}, PR-AUC {best_naive_pr_auc:.4f}).")
+else:
+    print(f"  {best_name} beats the best naive floor ({best_naive_name}, PR-AUC {best_naive_pr_auc:.4f}) —")
+    print(f"  {best_name} PR-AUC {best['pr_auc']:.4f}.")
+
+vs_v3 = best["pr_auc"] - V3_LR_PR_AUC
+if vs_v3 > 0.005:
+    print(f"  vs v3's untuned LR (PR-AUC {V3_LR_PR_AUC:.4f}): {vs_v3:+.4f} — tuning is a real lever here.")
+elif vs_v3 < -0.005:
+    print(f"  vs v3's untuned LR (PR-AUC {V3_LR_PR_AUC:.4f}): {vs_v3:+.4f} — worse, check for a wiring bug.")
+else:
+    print(f"  vs v3's untuned LR (PR-AUC {V3_LR_PR_AUC:.4f}): {vs_v3:+.4f} — flat, tuning didn't move this model much.")
+if "ogistic" in best_name:
+    print(f"  Winning model: {best_name} — LR wins even after a fair XGBoost tune, confirming this project's usual pattern.")
+else:
+    print(f"  Winning model: {best_name} — FLIPS this project's usual LR-over-trees pattern once fairly tuned; look closer before committing to a production model.")
+print("  Per this project's own metrics convention (PR-AUC is a PA-grain triage filter,")
+print("  not a decision metric): this result alone does not confirm or rule out a real")
+print("  improvement — that verdict comes from the game-grain check below.")
+print("=" * 72)
+
+
+# ── 7. Game-grain aggregation check ───────────────────────────────────────────
+print("\n" + "=" * 72)
+print("GAME-GRAIN CHECK — batter-game \"1+ strikeout\" (same approach as v1-v5)")
+print("=" * 72)
+
+best_model_name, best_model = max(candidates.items(), key=lambda t: t[1]["pr_auc"])
+print(f"Rolling up {best_model_name}'s val predictions...")
+
+pa_metrics, game_metrics, game_results = run_pa_vs_game_grain_check(
+    val_df, y_val, best_model["prob"], group_cols=("batter_id", "gamepk"),
+)
+
+naive_pa_results = val_df[["batter_id", "gamepk"]].copy()
+naive_pa_results["is_hit"] = np.asarray(y_val)  # cosmetic column name, see comment above
+naive_pa_results["pred_prob"] = naive_role_pred.to_numpy()
+naive_game_results = aggregate_pa_predictions_to_game(naive_pa_results, group_cols=("batter_id", "gamepk"))
+naive_game_metrics = evaluate_hit_predictor(
+    y_true=naive_game_results["game_is_hit"], y_prob=naive_game_results["game_pred_prob"],
+    n_bins=10, min_n=200, base_rate=naive_game_results["game_is_hit"].mean(),
+)
+
+print(f"\n{len(val_df):,} PAs -> {len(game_results):,} batter-game rows "
+      f"(mean {game_results['n_pa'].mean():.2f} PA/game)")
+print(f"Batter-game strikeout rate (1+ K): {game_results['game_is_hit'].mean():.3f}")
+print(f"\n{'Metric':<14} {'Naive (per-role)':>18} {best_model_name:>22}")
+for key in ("reliability", "resolution", "roc_auc", "brier", "log_loss", "ece"):
+    print(f"{key:<14} {naive_game_metrics[key]:>18.4f} {game_metrics[key]:>22.4f}")
+
+game_verdict = summarize_verdict(naive_game_metrics, game_metrics)
+print(f"\nVerdict vs naive at game grain: {game_verdict['verdict']}")
+print(f"  reliability delta: {game_verdict['reliability_delta']:+.4f} (lower=better, negative=more honest)")
+print(f"  resolution delta:  {game_verdict['resolution_delta']:+.4f} (higher=better, positive=more real spread)")
+# v3's own (untuned) game-grain result, hardcoded for reference.
+V3_GAME_RELIABILITY = 0.0002
+V3_GAME_RESOLUTION = 0.0133
+print(f"\n  (v3's untuned game-grain result, for reference: reliability {V3_GAME_RELIABILITY:.4f}, "
+      f"resolution {V3_GAME_RESOLUTION:.4f}, verdict real_improvement)")
+print("=" * 72)
+
+PLOT_DIR = STAGE / "plots"
+PLOT_DIR.mkdir(parents=True, exist_ok=True)
+plot_calibration_curve(
+    game_results["game_is_hit"],
+    {
+        "Naive (per-role K rate)": {"proba": naive_game_results["game_pred_prob"]},
+        best_model_name: {"proba": game_results["game_pred_prob"]},
+    },
+    n_bins=10, min_n=50,
+    save_path=PLOT_DIR / "game_grain_calibration.png",
+)
+print(f"Saved {PLOT_DIR / 'game_grain_calibration.png'}")
+
+
+# ── 8. Plots ───────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(6, 4))
+train_df[TARGET].value_counts().sort_index().plot(kind="bar", color="steelblue", ax=ax)
+ax.set_title(f"is_strikeout distribution — train ({FIT_SEASONS[0]}–{FIT_SEASONS[-1]})")
+ax.set_xlabel("is_strikeout")
+ax.set_ylabel("PAs")
+plt.tight_layout()
+plt.savefig(PLOT_DIR / "target_distribution.png", dpi=120)
+plt.close()
+print(f"\nSaved {PLOT_DIR / 'target_distribution.png'}")
+
+fig, ax = plt.subplots(figsize=(5, 5))
+cm = confusion_matrix(y_val, results["XGBoost (tuned)"]["pred"])
+ConfusionMatrixDisplay(cm, display_labels=["No K", "K"]).plot(ax=ax, cmap="Blues", colorbar=False)
+ax.set_title(f"XGBoost confusion matrix — val ({VAL_SEASON})")
+plt.tight_layout()
+plt.savefig(PLOT_DIR / "confusion_matrix.png", dpi=120)
+plt.close()
+print(f"Saved {PLOT_DIR / 'confusion_matrix.png'}")
+
+feature_names = num_cols + cat_cols
+importances = pd.Series(xgb_model.feature_importances_, index=feature_names).sort_values(ascending=True)
+fig, ax = plt.subplots(figsize=(7, max(4, len(importances) * 0.3)))
+ax.barh(importances.index, importances.values, color="steelblue")
+ax.set_title("Feature importance — XGBoost")
+ax.set_xlabel("Importance")
+plt.tight_layout()
+plt.savefig(PLOT_DIR / "feature_importance.png", dpi=120)
+plt.close()
+print(f"Saved {PLOT_DIR / 'feature_importance.png'}")
+
+
+# ── 9. MLflow logging ─────────────────────────────────────────────────────────
+for name, res in results.items():
+    metrics = {"pr_auc": res["pr_auc"], "roc_auc": res["roc_auc"]}
+    artifact_paths = [
+        PLOT_DIR / "target_distribution.png",
+        PLOT_DIR / "confusion_matrix.png",
+        PLOT_DIR / "feature_importance.png",
+    ]
+    params = {
+        "model_type": name,
+        "n_features": len(FEATURE_COLS),
+        "whip_shrinkage_k": WHIP_SHRINKAGE_K,
+        "short_pitcher_window": SHORT_PITCHER_WINDOW,
+        "short_team_window": SHORT_TEAM_WINDOW,
+        "fit_seasons": str(FIT_SEASONS),
+    }
+    if name == best_model_name:
+        metrics.update({
+            "game_reliability": game_metrics["reliability"],
+            "game_resolution": game_metrics["resolution"],
+            "game_roc_auc": game_metrics["roc_auc"],
+        })
+        params["game_verdict"] = game_verdict["verdict"]
+        artifact_paths.append(PLOT_DIR / "game_grain_calibration.png")
+
+    log_evaluation_to_mlflow(
+        metrics=metrics,
+        params=params,
+        tags={
+            "stage": "v14_platoon_matchup",
+            "target": TARGET,
+            "val_season": str(VAL_SEASON),
+            "git_sha": get_git_sha() or "unknown",
+        },
+        artifact_paths=artifact_paths,
+    )
+print("\nLogged all runs to MLflow (experiment: k_predictor).")

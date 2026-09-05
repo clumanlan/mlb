@@ -1,0 +1,219 @@
+/Users/clumanlan/projects/mlb/src/models/k_predictor/experiments/v14_platoon_matchup/slice_verification.py:92: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  return pd.concat(frames, ignore_index=True)
+
+Loading play-by-play...
+  s3://mlbdk/processed_data/prepared/playbyplay/2017/
+  s3://mlbdk/processed_data/prepared/playbyplay/2018/
+  s3://mlbdk/processed_data/prepared/playbyplay/2019/
+  s3://mlbdk/processed_data/prepared/playbyplay/2022/
+  s3://mlbdk/processed_data/prepared/playbyplay/2023/
+  s3://mlbdk/processed_data/prepared/playbyplay/2024/
+  s3://mlbdk/processed_data/prepared/playbyplay/2025/
+
+Loading schedule...
+  s3://mlbdk/processed_data/games/schedule/2016/
+  s3://mlbdk/processed_data/games/schedule/2017/
+  s3://mlbdk/processed_data/games/schedule/2018/
+  s3://mlbdk/processed_data/games/schedule/2019/
+  s3://mlbdk/processed_data/games/schedule/2022/
+  s3://mlbdk/processed_data/games/schedule/2023/
+  s3://mlbdk/processed_data/games/schedule/2024/
+  s3://mlbdk/processed_data/games/schedule/2025/
+
+Loading game info...
+  s3://mlbdk/processed_data/games/game_info/2017/
+  s3://mlbdk/processed_data/games/game_info/2018/
+  s3://mlbdk/processed_data/games/game_info/2019/
+  s3://mlbdk/processed_data/games/game_info/2022/
+  s3://mlbdk/processed_data/games/game_info/2023/
+  s3://mlbdk/processed_data/games/game_info/2024/
+  s3://mlbdk/processed_data/games/game_info/2025/
+
+Loading batter boxscore...
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2016/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2017/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2018/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2019/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2022/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2023/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2024/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2025/
+
+Loading pitcher boxscore...
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2016/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2017/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2018/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2019/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2022/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2023/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2024/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2025/
+
+Loading player info...
+
+Building PA-grain DataFrame...
+
+Fit seasons: [2018, 2019, 2022, 2023]  |  Val season: 2024  (105,265 PAs)
+
+Fitting v6 feature set (42 features, no platoon_matchup)...
+Fitting v14 feature set (v6's 42 + platoon_matchup)...
+
+##############################################################################
+# CALIBRATION BY PLATOON_MATCHUP SLICE — v6 (no feature) vs v14 (+ feature)
+##############################################################################
+
+==============================================================================
+SLICE: ALL PAs  (n=105,265)
+==============================================================================
+
+  -- v6 (no platoon_matchup) --
+     bucket     n  reliable  mean_pred  obs_hit_rate
+  0.060–0.161 21053      True      0.134         0.138
+  0.161–0.197 21053      True      0.179         0.181
+  0.197–0.231 21053      True      0.213         0.219
+  0.231–0.274 21053      True      0.251         0.252
+  0.274–0.600 21052      True      0.318         0.305
+  reliability=0.00005  resolution=0.00330  brier_reconstructed=0.16781
+
+  -- v14 (+ platoon_matchup) --
+     bucket     n  reliable  mean_pred  obs_hit_rate
+  0.057–0.160 21053      True      0.133         0.140
+  0.160–0.197 21053      True      0.179         0.180
+  0.197–0.231 21053      True      0.213         0.219
+  0.231–0.274 21053      True      0.251         0.251
+  0.274–0.607 21052      True      0.318         0.305
+  reliability=0.00005  resolution=0.00324  brier_reconstructed=0.16788
+
+==============================================================================
+SLICE: same_hand  (n=43,769)
+==============================================================================
+
+  -- v6 (no platoon_matchup) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.065–0.163 8754      True      0.137         0.149
+  0.163–0.198 8754      True      0.181         0.194
+  0.198–0.231 8753      True      0.214         0.222
+  0.231–0.272 8754      True      0.250         0.255
+  0.272–0.600 8753      True      0.316         0.303
+  reliability=0.00011  resolution=0.00275  brier_reconstructed=0.17145
+
+  -- v14 (+ platoon_matchup) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.068–0.166 8754      True      0.139         0.148
+  0.166–0.202 8753      True      0.184         0.192
+  0.202–0.234 8754      True      0.218         0.224
+  0.234–0.276 8754      True      0.254         0.253
+  0.276–0.607 8753      True      0.319         0.305
+  reliability=0.00008  resolution=0.00284  brier_reconstructed=0.17132
+
+==============================================================================
+SLICE: opposite_hand  (n=50,596)
+==============================================================================
+
+  -- v6 (no platoon_matchup) --
+     bucket     n  reliable  mean_pred  obs_hit_rate
+  0.062–0.161 10119      True      0.134         0.133
+  0.161–0.198 10119      True      0.180         0.175
+  0.198–0.234 10119      True      0.216         0.219
+  0.234–0.277 10119      True      0.254         0.250
+  0.277–0.583 10119      True      0.323         0.310
+  reliability=0.00004  resolution=0.00371  brier_reconstructed=0.16650
+
+  -- v14 (+ platoon_matchup) --
+     bucket     n  reliable  mean_pred  obs_hit_rate
+  0.057–0.158 10119      True      0.131         0.134
+  0.158–0.195 10119      True      0.177         0.174
+  0.195–0.230 10119      True      0.213         0.219
+  0.230–0.274 10119      True      0.251         0.249
+  0.274–0.582 10119      True      0.320         0.311
+  reliability=0.00003  resolution=0.00372  brier_reconstructed=0.16647
+
+==============================================================================
+SLICE: switch_hitter  (n=10,859)
+==============================================================================
+
+  -- v6 (no platoon_matchup) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.060–0.151 2172      True      0.124         0.137
+  0.151–0.184 2172      True      0.168         0.166
+  0.184–0.217 2171      True      0.200         0.199
+  0.217–0.258 2172      True      0.236         0.234
+  0.258–0.584 2171      True      0.303         0.288
+  reliability=0.00008  resolution=0.00278  brier_reconstructed=0.16021
+
+  -- v14 (+ platoon_matchup) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.058–0.151 2172      True      0.124         0.136
+  0.151–0.185 2172      True      0.168         0.168
+  0.185–0.217 2171      True      0.200         0.199
+  0.217–0.258 2172      True      0.236         0.234
+  0.258–0.583 2171      True      0.302         0.288
+  reliability=0.00007  resolution=0.00278  brier_reconstructed=0.16021
+
+##############################################################################
+# SUMMARY — reliability/resolution delta (v14 minus v6; reliability: lower=better, resolution: higher=better)
+##############################################################################
+  ALL PAs          reliability 0.00005 -> 0.00005 (+0.00001)   resolution 0.00330 -> 0.00324 (-0.00006)
+  same_hand        reliability 0.00011 -> 0.00008 (-0.00004)   resolution 0.00275 -> 0.00284 (+0.00009)
+  opposite_hand    reliability 0.00004 -> 0.00003 (-0.00002)   resolution 0.00371 -> 0.00372 (+0.00001)
+  switch_hitter    reliability 0.00008 -> 0.00007 (-0.00001)   resolution 0.00278 -> 0.00278 (-0.00000)
+
+##############################################################################
+# PAIRED BOOTSTRAP — same_hand slice, Brier score (v6 - v14; positive = v14 better)
+##############################################################################
+  n=43,769  Brier(v6)=0.17117  Brier(v14)=0.17113
+  delta=+0.00004  95% CI=[+0.00001, +0.00009]  REAL improvement
+
+##############################################################################
+# MOST CONFIDENT PREDICTED STRIKEOUTS (top 15 by pred_v14) — v14 model, val season 2024
+##############################################################################
+ game_date    pitcher_name       batter_name  is_strikeout  pred_v14 platoon_matchup  expected_times_through_order  pitcher_roll_last3g_k_rate  pitcher_roll_last3g_whip  pitcher_roll_last3g_command_swinging_strike_rate  pitcher_roll_season_k_rate  pitcher_last_season_pa_strikeout_rate  batter_last_season_pa_strikeout_rate  batter_roll_season_pa_strikeout_rate
+2024-04-21  Edward Cabrera Alexander Canario             1  0.607132       same_hand                           1.0                    1.227273                  1.500000                                          0.128099                    1.666667                               0.263021                              0.470588                              0.571429
+2024-09-09    Brady Singer  Jasson Domínguez             0  0.583426   switch_hitter                           1.0                    0.840000                  1.440000                                          0.106667                    0.947368                               0.187406                              0.583333                              0.750000
+2024-04-12    Reid Detmers      Bobby Dalbec             0  0.582257   opposite_hand                           1.0                    1.444444                  0.944444                                          0.152482                    1.727273                               0.270796                              0.528302                              0.666667
+2024-06-07 Garrett Crochet      Bobby Dalbec             0  0.578739   opposite_hand                           1.0                    1.277778                  0.722222                                          0.150538                    1.334928                                    NaN                              0.528302                              0.476923
+2024-04-06    Reid Detmers      Bobby Dalbec             1  0.576501   opposite_hand                           1.0                    1.312500                  1.125000                                          0.116197                    1.400000                               0.270796                              0.528302                              0.833333
+2024-05-20     Pablo López        Joey Gallo             0  0.567609   opposite_hand                           1.0                    1.125000                  1.071429                                          0.128814                    1.152318                               0.296896                              0.431310                              0.461538
+2024-05-17    Zack Wheeler        Joey Gallo             1  0.566669   opposite_hand                           1.0                    1.187500                  1.250000                                          0.118056                    1.267606                               0.265693                              0.431310                              0.467391
+2024-07-02     Dylan Cease  Jonathan Ornelas             0  0.564394       same_hand                           1.0                    1.565217                  1.369565                                          0.137584                    1.271186                               0.270557                              1.000000                              0.000000
+2024-04-15   Tyler Glasnow        Joey Gallo             0  0.562884   opposite_hand                           1.0                    1.368421                  0.631579                                          0.152416                    1.208333                               0.345088                              0.431310                              0.409836
+2024-04-21  Edward Cabrera Alexander Canario             0  0.562609       same_hand                           2.0                    1.227273                  1.500000                                          0.128099                    1.666667                               0.263021                              0.470588                              0.571429
+2024-05-21        Joe Ryan        Joey Gallo             1  0.560596   opposite_hand                           1.0                    0.927273                  0.981818                                          0.102740                    1.094340                               0.290938                              0.431310                              0.453704
+2024-05-19      Aaron Nola        Joey Gallo             0  0.552616   opposite_hand                           1.0                    1.017857                  1.125000                                          0.088435                    0.948276                               0.261333                              0.431310                              0.470000
+2024-05-12 Tyler Alexander      Jahmai Jones             0  0.552175   opposite_hand                           1.0                    1.050000                  1.200000                                          0.121339                    1.018868                               0.300000                              0.454545                              0.666667
+2024-06-15    Carlos Rodón      Bobby Dalbec             1  0.551383   opposite_hand                           1.0                    0.894737                  0.631579                                          0.165517                    0.925000                               0.228216                              0.528302                              0.469136
+2024-06-17   Yusei Kikuchi      Bobby Dalbec             1  0.547767   opposite_hand                           1.0                    0.918367                  1.346939                                          0.167273                    0.982759                               0.259434                              0.528302                              0.465116
+
+  Actual strikeout rate among these 15: 0.40
+
+##############################################################################
+# BIGGEST MISSES — predicted HIGH, no strikeout happened (top 10 false positives)
+##############################################################################
+ game_date    pitcher_name       batter_name  is_strikeout  pred_v14 platoon_matchup  expected_times_through_order  pitcher_roll_last3g_k_rate  pitcher_roll_last3g_whip  pitcher_roll_last3g_command_swinging_strike_rate  pitcher_roll_season_k_rate  pitcher_last_season_pa_strikeout_rate  batter_last_season_pa_strikeout_rate  batter_roll_season_pa_strikeout_rate
+2024-09-09    Brady Singer  Jasson Domínguez             0  0.583426   switch_hitter                           1.0                    0.840000                  1.440000                                          0.106667                    0.947368                               0.187406                              0.583333                              0.750000
+2024-04-12    Reid Detmers      Bobby Dalbec             0  0.582257   opposite_hand                           1.0                    1.444444                  0.944444                                          0.152482                    1.727273                               0.270796                              0.528302                              0.666667
+2024-06-07 Garrett Crochet      Bobby Dalbec             0  0.578739   opposite_hand                           1.0                    1.277778                  0.722222                                          0.150538                    1.334928                                    NaN                              0.528302                              0.476923
+2024-05-20     Pablo López        Joey Gallo             0  0.567609   opposite_hand                           1.0                    1.125000                  1.071429                                          0.128814                    1.152318                               0.296896                              0.431310                              0.461538
+2024-07-02     Dylan Cease  Jonathan Ornelas             0  0.564394       same_hand                           1.0                    1.565217                  1.369565                                          0.137584                    1.271186                               0.270557                              1.000000                              0.000000
+2024-04-15   Tyler Glasnow        Joey Gallo             0  0.562884   opposite_hand                           1.0                    1.368421                  0.631579                                          0.152416                    1.208333                               0.345088                              0.431310                              0.409836
+2024-04-21  Edward Cabrera Alexander Canario             0  0.562609       same_hand                           2.0                    1.227273                  1.500000                                          0.128099                    1.666667                               0.263021                              0.470588                              0.571429
+2024-05-19      Aaron Nola        Joey Gallo             0  0.552616   opposite_hand                           1.0                    1.017857                  1.125000                                          0.088435                    0.948276                               0.261333                              0.431310                              0.470000
+2024-05-12 Tyler Alexander      Jahmai Jones             0  0.552175   opposite_hand                           1.0                    1.050000                  1.200000                                          0.121339                    1.018868                               0.300000                              0.454545                              0.666667
+2024-07-04    Michael King  Jonathan Ornelas             0  0.547413       same_hand                           1.0                    1.200000                  1.500000                                          0.104895                    1.141869                               0.299270                              1.000000                              0.000000
+
+##############################################################################
+# BIGGEST MISSES — predicted LOW, strikeout happened anyway (top 10 false negatives)
+##############################################################################
+ game_date    pitcher_name      batter_name  is_strikeout  pred_v14 platoon_matchup  expected_times_through_order  pitcher_roll_last3g_k_rate  pitcher_roll_last3g_whip  pitcher_roll_last3g_command_swinging_strike_rate  pitcher_roll_season_k_rate  pitcher_last_season_pa_strikeout_rate  batter_last_season_pa_strikeout_rate  batter_roll_season_pa_strikeout_rate
+2024-06-20        Ty Blach     Miguel Rojas             1  0.068940   opposite_hand                           1.0                    0.638298                  1.723404                                          0.081967                    0.519685                               0.156118                              0.106667                              0.090164
+2024-05-30        Ray Kerr  Ildemaro Vargas             1  0.070831   switch_hitter                           2.0                    1.500000                  2.000000                                          0.180556                    1.500000                                    NaN                              0.072289                              0.083333
+2024-08-28    Carlos Rodón     Keibert Ruiz             1  0.071760   switch_hitter                           NaN                    0.535714                  0.642857                                          0.102041                    0.984138                               0.234875                              0.093625                              0.098701
+2024-06-02     Gavin Stone Charlie Blackmon             1  0.072723   opposite_hand                           2.0                    0.578947                  1.210526                                          0.091912                    0.680000                               0.084746                              0.134111                              0.107527
+2024-05-22   Jose Quintana     José Ramírez             1  0.073397   switch_hitter                           2.0                    0.692308                  1.769231                                          0.099567                    0.666667                               0.184615                              0.103789                              0.102439
+2024-09-20   Kyle Freeland     Miguel Rojas             1  0.073565   opposite_hand                           2.0                    0.666667                  0.944444                                          0.064639                    0.766990                               0.138739                              0.106667                              0.098101
+2024-06-18   Austin Gomber     Miguel Rojas             1  0.073600   opposite_hand                           NaN                    1.090909                  2.272727                                          0.095238                    0.817121                               0.208672                              0.106667                              0.085470
+2024-08-11   Bailey Falter     Miguel Rojas             1  0.075427   opposite_hand                           2.0                    0.642857                  1.607143                                          0.092308                    0.665529                               0.160643                              0.106667                              0.108491
+2024-04-25   Dakota Hudson   Luis Campusano             1  0.075928       same_hand                           2.0                    0.625000                  1.750000                                          0.081851                    0.562500                               0.138889                              0.103175                              0.095238
+2024-09-10 Jonathan Cannon      Steven Kwan             1  0.076909   opposite_hand                           3.0                    0.750000                  1.840909                                          0.071429                    0.671480                                    NaN                              0.103395                              0.090730
+
+Done.

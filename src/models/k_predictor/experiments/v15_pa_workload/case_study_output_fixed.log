@@ -1,0 +1,41 @@
+/Users/clumanlan/projects/mlb/src/models/k_predictor/experiments/v15_pa_workload/case_study.py:56: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  return pd.concat(frames, ignore_index=True)
+
+Loading play-by-play (2023-2024)...
+  s3://mlbdk/processed_data/prepared/playbyplay/2023/
+  s3://mlbdk/processed_data/prepared/playbyplay/2024/
+
+Loading schedule...
+  s3://mlbdk/processed_data/games/schedule/2023/
+  s3://mlbdk/processed_data/games/schedule/2024/
+
+Loading game info...
+  s3://mlbdk/processed_data/games/game_info/2023/
+  s3://mlbdk/processed_data/games/game_info/2024/
+
+Loading batter boxscore...
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2023/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2024/
+
+Loading pitcher boxscore...
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2023/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2024/
+
+Loading player info...
+
+Building PA-grain DataFrame...
+
+Most PAs by one batter against a starter in 2024: 5 (gamepk=744918, batter_id=676914)
+
+####################################################################################################
+# Davis Schneider vs Nick Pivetta -- 2024-06-17 (gamepk=744918)
+####################################################################################################
+
+ batter_pa_number  game_date pitcher_name     batter_name  is_strikeout pitcher_throw_hand batter_bat_side platoon_matchup  expected_times_through_order  estimated_team_pa_position  starting_pitcher_roll_last3g_pa_pitch_count_mean  pitcher_projected_pitches_before_pa
+                1 2024-06-17 Nick Pivetta Davis Schneider             0                  R               R       same_hand                           1.0                           1                                          4.181818                             0.000000
+                2 2024-06-17 Nick Pivetta Davis Schneider             0                  R               R       same_hand                           2.0                          10                                          4.181818                            37.636364
+                3 2024-06-17 Nick Pivetta Davis Schneider             0                  R               R       same_hand                           3.0                          19                                          4.181818                            75.272727
+                4 2024-06-17 Nick Pivetta Davis Schneider             1                  R               R       same_hand                           NaN                          28                                          4.181818                           112.909091
+                5 2024-06-17 Nick Pivetta Davis Schneider             0                  R               R       same_hand                           NaN                          37                                          4.181818                           150.545455
+
+Done.

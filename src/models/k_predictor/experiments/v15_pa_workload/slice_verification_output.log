@@ -1,0 +1,196 @@
+/Users/clumanlan/projects/mlb/src/models/k_predictor/experiments/v15_pa_workload/slice_verification.py:95: FutureWarning: The behavior of DataFrame concatenation with empty or all-NA entries is deprecated. In a future version, this will no longer exclude empty or all-NA columns when determining the result dtypes. To retain the old behavior, exclude the relevant entries before the concat operation.
+  return pd.concat(frames, ignore_index=True)
+
+Loading play-by-play...
+  s3://mlbdk/processed_data/prepared/playbyplay/2017/
+  s3://mlbdk/processed_data/prepared/playbyplay/2018/
+  s3://mlbdk/processed_data/prepared/playbyplay/2019/
+  s3://mlbdk/processed_data/prepared/playbyplay/2022/
+  s3://mlbdk/processed_data/prepared/playbyplay/2023/
+  s3://mlbdk/processed_data/prepared/playbyplay/2024/
+  s3://mlbdk/processed_data/prepared/playbyplay/2025/
+
+Loading schedule...
+  s3://mlbdk/processed_data/games/schedule/2016/
+  s3://mlbdk/processed_data/games/schedule/2017/
+  s3://mlbdk/processed_data/games/schedule/2018/
+  s3://mlbdk/processed_data/games/schedule/2019/
+  s3://mlbdk/processed_data/games/schedule/2022/
+  s3://mlbdk/processed_data/games/schedule/2023/
+  s3://mlbdk/processed_data/games/schedule/2024/
+  s3://mlbdk/processed_data/games/schedule/2025/
+
+Loading game info...
+  s3://mlbdk/processed_data/games/game_info/2017/
+  s3://mlbdk/processed_data/games/game_info/2018/
+  s3://mlbdk/processed_data/games/game_info/2019/
+  s3://mlbdk/processed_data/games/game_info/2022/
+  s3://mlbdk/processed_data/games/game_info/2023/
+  s3://mlbdk/processed_data/games/game_info/2024/
+  s3://mlbdk/processed_data/games/game_info/2025/
+
+Loading batter boxscore...
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2016/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2017/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2018/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2019/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2022/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2023/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2024/
+  s3://mlbdk/processed_data/prepared/batter_boxscore/2025/
+
+Loading pitcher boxscore...
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2016/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2017/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2018/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2019/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2022/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2023/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2024/
+  s3://mlbdk/processed_data/prepared/pitcher_boxscore/2025/
+
+Loading player info...
+
+Building PA-grain DataFrame...
+
+Fit seasons: [2018, 2019, 2022, 2023]  |  Val season: 2024  (105,265 PAs)
+
+Fitting v14 feature set (43 features)...
+Fitting v15 feature set (v14's 43 + 2 workload features)...
+
+##############################################################################
+# CALIBRATION BY TIMES-THROUGH-ORDER BUCKET — v14 (no workload feats) vs v15 (+ workload feats)
+##############################################################################
+
+==============================================================================
+SLICE: ALL PAs  (n=105,265)
+==============================================================================
+
+  -- v14 (no workload feats) --
+     bucket     n  reliable  mean_pred  obs_hit_rate
+  0.058–0.160 21053      True      0.133         0.139
+  0.160–0.197 21053      True      0.179         0.180
+  0.197–0.231 21053      True      0.214         0.220
+  0.231–0.274 21053      True      0.251         0.252
+  0.274–0.609 21052      True      0.318         0.305
+  reliability=0.00005  resolution=0.00328  brier_reconstructed=0.16783
+
+  -- v15 (+ workload feats) --
+     bucket     n  reliable  mean_pred  obs_hit_rate
+  0.056–0.160 21053      True      0.133         0.139
+  0.160–0.197 21053      True      0.179         0.181
+  0.197–0.231 21053      True      0.213         0.219
+  0.231–0.273 21053      True      0.251         0.252
+  0.273–0.603 21052      True      0.318         0.305
+  reliability=0.00005  resolution=0.00327  brier_reconstructed=0.16785
+
+==============================================================================
+SLICE: TTO=1  (n=42,505)
+==============================================================================
+
+  -- v14 (no workload feats) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.070–0.180 8501      True      0.150         0.152
+  0.180–0.217 8501      True      0.199         0.203
+  0.217–0.253 8501      True      0.235         0.242
+  0.253–0.296 8501      True      0.273         0.269
+  0.296–0.609 8500      True      0.341         0.324
+  reliability=0.00007  resolution=0.00340  brier_reconstructed=0.17801
+
+  -- v15 (+ workload feats) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.069–0.180 8501      True      0.150         0.152
+  0.180–0.217 8501      True      0.199         0.204
+  0.217–0.252 8501      True      0.234         0.240
+  0.252–0.296 8501      True      0.273         0.271
+  0.296–0.603 8500      True      0.340         0.323
+  reliability=0.00007  resolution=0.00337  brier_reconstructed=0.17803
+
+==============================================================================
+SLICE: TTO=2  (n=40,096)
+==============================================================================
+
+  -- v14 (no workload feats) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.061–0.155 8019      True      0.129         0.139
+  0.155–0.189 8019      True      0.172         0.178
+  0.189–0.222 8019      True      0.205         0.204
+  0.222–0.262 8019      True      0.241         0.241
+  0.262–0.564 8019      True      0.305         0.299
+  reliability=0.00003  resolution=0.00299  brier_reconstructed=0.16414
+
+  -- v15 (+ workload feats) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.061–0.155 8019      True      0.129         0.139
+  0.155–0.189 8019      True      0.172         0.177
+  0.189–0.222 8019      True      0.205         0.204
+  0.222–0.263 8019      True      0.241         0.243
+  0.263–0.565 8019      True      0.306         0.297
+  reliability=0.00004  resolution=0.00296  brier_reconstructed=0.16418
+
+==============================================================================
+SLICE: TTO=3  (n=12,291)
+==============================================================================
+
+  -- v14 (no workload feats) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.058–0.141 2458      True      0.119         0.118
+  0.141–0.171 2458      True      0.156         0.142
+  0.171–0.203 2458      True      0.187         0.186
+  0.203–0.242 2458      True      0.222         0.219
+  0.242–0.508 2458      True      0.281         0.287
+  reliability=0.00005  resolution=0.00355  brier_reconstructed=0.15064
+
+  -- v15 (+ workload feats) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.056–0.140 2458      True      0.118         0.117
+  0.140–0.171 2458      True      0.156         0.141
+  0.171–0.202 2458      True      0.186         0.190
+  0.202–0.240 2458      True      0.220         0.214
+  0.240–0.503 2458      True      0.278         0.290
+  reliability=0.00008  resolution=0.00366  brier_reconstructed=0.15056
+
+==============================================================================
+SLICE: TTO=NaN (expected bullpen)  (n=10,373)
+==============================================================================
+
+  -- v14 (no workload feats) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.071–0.154 2075      True      0.128         0.138
+  0.154–0.186 2074      True      0.171         0.176
+  0.186–0.213 2075      True      0.200         0.225
+  0.213–0.245 2074      True      0.228         0.212
+  0.245–0.469 2074      True      0.277         0.263
+  reliability=0.00024  resolution=0.00182  brier_reconstructed=0.15994
+
+  -- v15 (+ workload feats) --
+     bucket    n  reliable  mean_pred  obs_hit_rate
+  0.070–0.152 2075      True      0.127         0.139
+  0.152–0.185 2074      True      0.169         0.170
+  0.185–0.212 2075      True      0.199         0.220
+  0.212–0.244 2074      True      0.227         0.217
+  0.244–0.482 2074      True      0.277         0.267
+  reliability=0.00016  resolution=0.00195  brier_reconstructed=0.15972
+
+##############################################################################
+# SUMMARY — reliability/resolution delta (v15 minus v14; reliability: lower=better, resolution: higher=better)
+##############################################################################
+  ALL PAs                      reliability 0.00005 -> 0.00005 (+0.00000)   resolution 0.00328 -> 0.00327 (-0.00002)
+  TTO=1                        reliability 0.00007 -> 0.00007 (-0.00000)   resolution 0.00340 -> 0.00337 (-0.00002)
+  TTO=2                        reliability 0.00003 -> 0.00004 (+0.00001)   resolution 0.00299 -> 0.00296 (-0.00003)
+  TTO=3                        reliability 0.00005 -> 0.00008 (+0.00004)   resolution 0.00355 -> 0.00366 (+0.00011)
+  TTO=NaN (expected bullpen)   reliability 0.00024 -> 0.00016 (-0.00008)   resolution 0.00182 -> 0.00195 (+0.00013)
+
+##############################################################################
+# PAIRED BOOTSTRAP — TTO=NaN slice, Brier score (v14 - v15; positive = v15 better)
+##############################################################################
+  n=10,373  Brier(v14)=0.15974  Brier(v15)=0.15975
+  delta=-0.00001  95% CI=[-0.00016, +0.00014]  CI includes zero — not distinguishable from noise
+
+##############################################################################
+# PAIRED BOOTSTRAP — TTO=3 slice, Brier score (v14 - v15; positive = v15 better)
+##############################################################################
+  n=12,291  Brier(v14)=0.15053  Brier(v15)=0.15050
+  delta=+0.00003  95% CI=[-0.00003, +0.00010]  CI includes zero — not distinguishable from noise
+
+Done.

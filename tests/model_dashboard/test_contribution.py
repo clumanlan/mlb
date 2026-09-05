@@ -3,6 +3,7 @@ import pytest
 
 from shared.model_dashboard.logic.contribution import compute_contribution
 from shared.model_dashboard.logic.metrics import per_row_loss
+from shared.model_dashboard.logic.slicing import generate_interaction_slices
 
 
 def _overall_loss(df, target_col, pred_col):
@@ -76,3 +77,16 @@ def test_contribution_returns_expected_columns(biased_slice_data):
 
     expected_cols = ["feature", "value", "n", "pct", "slice_loss", "delta", "contribution"]
     assert list(result.columns) == expected_cols
+
+
+# ── Test 5: interaction slices mask on BOTH columns ───────────────────────────
+
+def test_contribution_interaction_slice_masks_on_both_columns(biased_interaction_data):
+    df = biased_interaction_data
+    slices = generate_interaction_slices(df, [("batSide", "pitcher_hand")])
+    result = compute_contribution(df, slices, target_col="is_hit", pred_col="pred_prob")
+
+    target_row = result[result["value"] == "L×R"]
+    assert len(target_row) == 1, "L×R interaction slice should survive min_n and appear exactly once"
+    assert target_row.iloc[0]["contribution"] > 0, "L×R is the biased combo and should have positive contribution"
+    assert result.iloc[0]["value"] == "L×R", "biased interaction slice should rank first by contribution"
