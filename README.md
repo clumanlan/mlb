@@ -14,7 +14,26 @@ S3 bucket `mlbdk` (us-east-2), Parquet, partitioned `{table}/{year}/{YYYY-MM-DD}
 | Odds (team lines + player props) — The Odds API | Live daily since ~2026-05 | A one-off historical pull (10x normal credit cost) added 2025 season-long coverage for backtesting; nothing before 2025 exists |
 | DraftKings slate (contest/player pool) | Live daily | Feeds lineup/slate context, not itself a training source |
 
-![Pipeline layers](docs/pipeline_layers.svg)
+```mermaid
+flowchart TD
+    classDef done fill:#DEEDE8,stroke:#0E7C6E,color:#0E7C6E,stroke-width:1.5px;
+    classDef wip fill:#F3E7CF,stroke:#9C6B14,color:#9C6B14,stroke-width:1.5px;
+    classDef todo fill:#E8E9EC,stroke:#6C7280,color:#6C7280,stroke-width:1.5px;
+
+    L1["Layer 1 - Raw Ingestion<br/>MLB Stats API to S3<br/>done"]
+    L2["Layer 2 - Validation<br/>quality gate before downstream runs<br/>done"]
+    L3["Layer 3 - Feature Engineering<br/>rolling-window features to S3<br/>in progress"]
+    L4["Layer 4 - Feature Store<br/>Feast, offline S3/Athena, online DynamoDB<br/>not started"]
+    L5["Layer 5 - Model Training<br/>XGBoost baseline to attention model<br/>in progress"]
+    L6["Layer 6 - Prediction Pipeline<br/>daily batch inference, lineup-aware<br/>not started"]
+    L7["Layer 7 - MLOps<br/>MLflow, Evidently AI, CloudWatch<br/>not started"]
+
+    L1 --> L2 --> L3 --> L4 --> L5 --> L6 --> L7
+
+    class L1,L2 done;
+    class L3,L5 wip;
+    class L4,L6,L7 todo;
+```
 
 Layer 3's feature functions are tested and reusable, but every model still re-pulls and rebuilds full-season data in a one-off script rather than a scheduled incremental job — see `CLAUDE.md` for the full layer breakdown.
 
@@ -26,7 +45,37 @@ Layer 3's feature functions are tested and reusable, but every model still re-pu
 
 Every prop here is a per-PA classifier (hit, walk, strikeout — home run not yet built) rolled up two ways: by batter, via `n_pa_predictor`'s PA-count estimate, or by pitcher, via `batters_faced_predictor`'s — the "allowed" version of the same prop. Outs recorded is arithmetic (batters faced minus hits and walks allowed), not its own model. Pitcher props are ahead in the table below mostly because that count is bigger — ~22 batters faced vs. ~4 plate appearances — a working reason, not a settled one; see `DECISIONS.md`'s 2026-09-05 entry for the fuller case.
 
-![The Prop Matrix](docs/prop_matrix.svg)
+```mermaid
+flowchart LR
+    classDef win fill:#DEEDE8,stroke:#0E7C6E,color:#0E7C6E,stroke-width:1.5px;
+    classDef mix fill:#F3E7CF,stroke:#9C6B14,color:#9C6B14,stroke-width:1.5px;
+    classDef loss fill:#F5E4DF,stroke:#B5473A,color:#B5473A,stroke-width:1.5px;
+    classDef todo fill:#E8E9EC,stroke:#6C7280,color:#6C7280,stroke-width:1.5px;
+    classDef engine fill:#FFFFFF,stroke:#1B1F27,stroke-width:2px;
+
+    NPA["n_pa_predictor<br/>batter's PA count tonight<br/>real_improvement"]:::engine
+    BF["batters_faced_predictor<br/>pitcher's batters faced tonight<br/>real_improvement"]:::engine
+
+    subgraph BATTER[BATTER PROPS]
+        direction TB
+        HITB["Batter Hits<br/>hit_predictor - flat vs. naive"]:::loss
+        WALKB["Batter Walks<br/>bb_predictor - overconfidence_risk"]:::mix
+        HRB["Batter Home Runs<br/>not started"]:::todo
+    end
+
+    subgraph PITCHER[PITCHER-ALLOWED PROPS]
+        direction TB
+        HITP["Pitcher Hits Allowed<br/>untried, no new model needed"]:::todo
+        WALKP["Pitcher Walks Allowed<br/>untried, no new model needed"]:::todo
+        KP["Pitcher Strikeouts<br/>k_predictor - real_improvement,<br/>no edge vs. market"]:::win
+    end
+
+    NPA --> HITB
+    NPA --> WALKB
+    BF --> HITP
+    BF --> WALKP
+    BF --> KP
+```
 
 Two things worth noticing: **Pitcher Hits Allowed and Pitcher Walks Allowed need zero new modeling** — both classifiers and `batters_faced_predictor` already exist, nobody's combined them — and **only `k_predictor` is actually production-real**. `hit_predictor` and `bb_predictor`'s game-level checks use the *realized* PA count from the box score, not a prediction, so neither could run before a game starts yet.
 
