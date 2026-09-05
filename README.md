@@ -14,7 +14,9 @@ S3 bucket `mlbdk` (us-east-2), Parquet, partitioned `{table}/{year}/{YYYY-MM-DD}
 | Odds (team lines + player props) — The Odds API | Live daily since ~2026-05 | A one-off historical pull (10x normal credit cost) added 2025 season-long coverage for backtesting; nothing before 2025 exists |
 | DraftKings slate (contest/player pool) | Live daily | Feeds lineup/slate context, not itself a training source |
 
-Pipeline layers (see `CLAUDE.md` for the full breakdown): raw ingestion and validation (Layers 1–2) run daily via Lambda; feature engineering (Layer 3) exists as tested, reusable functions but every model still re-pulls and rebuilds full-season data in a one-off script rather than a scheduled incremental job; a Feast-based online feature store (Layer 4) is scaffolded but never materialized; a production training/inference pipeline and MLOps layer (Layers 5–7) are not started.
+![Pipeline layers](docs/pipeline_layers.svg)
+
+Layer 3's feature functions are tested and reusable, but every model still re-pulls and rebuilds full-season data in a one-off script rather than a scheduled incremental job — see `CLAUDE.md` for the full layer breakdown.
 
 **Model split, consistent across all six models below:** train on seasons `[2017, 2018, 2019, 2022, 2023, 2024, 2025]` minus val/test, val = 2024 (iterated against during development), test = 2025 (locked, never touched until a model is final). `k_predictor` additionally has a live 2026 real-market backtest (66 dates, 1,160 starts matched against real DraftKings lines) — the only check in this repo against real prices rather than a naive floor.
 
