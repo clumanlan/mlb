@@ -20,30 +20,13 @@ Pipeline layers (see `CLAUDE.md` for the full breakdown): raw ingestion and vali
 
 ---
 
-## Current working thesis
-
-**Framed as a hypothesis, not a settled result** — see the record below before trusting it further.
-
-A batter gets ~4 plate appearances in a game, and once contact is made, the outcome — exit velocity, launch angle, where nine fielders happen to be standing — is close to a coin flip even for a great hitter (this is why BABIP is famous in sabermetrics: it barely varies by skill). A starting pitcher's game line is built from ~22 batters faced instead. Those PAs aren't fully independent — a start really can run hot or cold as a whole (confirmed via a within-game correlation check, ICC ≈ 0.01, statistically real but small) — but even with that correlation, a pitcher's game total is resting on far more draws than any one batter's boom-or-bust line. Strikeouts and walks sharpen this further: neither has to touch a ball in play at all, so they skip the noisiest step in the chain entirely.
-
-**Evidence for:**
-- K-prop (`k_predictor`) and `low_pa` both clear naive with a verified `real_improvement` / bootstrap-CI-backed precision lift — not just a better-looking metric.
-- The three-true-outcomes mechanism (K/BB/HBP resolve without contact) has real support in the sabermetrics literature independent of anything built here.
-
-**Evidence against, or still open:**
-- The mechanism-side record is 2 wins, 2 mixed — `bb_predictor` and `short_outing_predictor` both land on `overconfidence_risk` (real added discrimination, calibration slightly worse than naive), not a clean sweep.
-- K-prop's win doesn't survive a sharper bar: against real 2026 DraftKings odds, v6 has a confirmed calibration bug (reliability gap vs. the market, bootstrap-significant) and shows no betting edge — disagreement win rate sits at coin-flip, short of the ~52.4% break-even line.
-- Why `hit_predictor` specifically loses to a two-line statistical formula is still unresolved — a methodology confound (v1–v5 bundle many features per run with no incremental verification, unlike the shrinkage baseline's one-signal-at-a-time approach) hasn't been ruled out as the real explanation, separate from "the target is just noisy."
-
----
-
 ## The prop matrix
 
-Every "simple" prop this project targets is one of three per-plate-appearance classifiers — hit, walk, strikeout (home run not yet built) — rolled up two different ways: grouped by batter (needs `n_pa_predictor`'s PA-count estimate) for a batter prop, or grouped by pitcher (needs `batters_faced_predictor`'s estimate) for the "allowed" version of the same prop. Outs recorded isn't its own model — it falls out of batters faced minus hits and walks allowed.
+Every prop here is a per-PA classifier (hit, walk, strikeout — home run not yet built) rolled up two ways: by batter, via `n_pa_predictor`'s PA-count estimate, or by pitcher, via `batters_faced_predictor`'s — the "allowed" version of the same prop. Outs recorded is arithmetic (batters faced minus hits and walks allowed), not its own model. Pitcher props are ahead in the table below mostly because that count is bigger — ~22 batters faced vs. ~4 plate appearances — a working reason, not a settled one; see `DECISIONS.md`'s 2026-09-05 entry for the fuller case.
 
 ![The Prop Matrix](docs/prop_matrix.svg)
 
-Two things this makes visible that the numbers alone don't: **Pitcher Hits Allowed and Pitcher Walks Allowed need zero new modeling** — both classifiers and the count model already exist, nobody has combined them — and **"built" doesn't currently mean production-ready for anything except `k_predictor`**. `hit_predictor` and `bb_predictor`'s existing game-level checks are backtests against the *realized* plate-appearance count from the box score, not something computable before a game actually starts.
+Two things worth noticing: **Pitcher Hits Allowed and Pitcher Walks Allowed need zero new modeling** — both classifiers and `batters_faced_predictor` already exist, nobody's combined them — and **only `k_predictor` is actually production-real**. `hit_predictor` and `bb_predictor`'s game-level checks use the *realized* PA count from the box score, not a prediction, so neither could run before a game starts yet.
 
 ## Models ranked by performance vs. naive
 
