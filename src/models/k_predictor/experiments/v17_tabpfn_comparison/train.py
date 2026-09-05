@@ -51,8 +51,26 @@ No AWS credentials needed -- loads the same cached model_df_v6.parquet
 per this repo's own "any future k_predictor-v6-feature-set diagnostic
 should load that cache instead of rebuilding from S3" note.
 """
+import os
+
+# Must be set before torch is imported. Works around a real macOS deadlock:
+# PyTorch's bundled OpenMP runtime and pyarrow's own OpenMP-based thread pool
+# both get loaded into this process, and a linalg call (TabPFN's internal
+# QR-based preprocessing) can hang forever in the OpenMP join barrier when
+# more than one thread tries to use it. Confirmed via `sample` on a stuck
+# run: the process sat in torch::autograd::THPVariable_linalg_qr ->
+# __kmp_join_barrier for 2h42m using 5s of CPU time -- a deadlock, not slow
+# computation. KMP_DUPLICATE_LIB_OK silences the conflict; pinning every
+# thread pool to 1 thread removes the actual race.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+
 import time
 from pathlib import Path
+
+import torch
+torch.set_num_threads(1)
 
 import joblib
 import numpy as np

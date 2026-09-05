@@ -1,14 +1,14 @@
 """
 Builds a per-start game log (one row per pitcher-game) for TEST_SEASON=2025,
 joining pitches-thrown from pitcher_boxscore onto the batters-faced/strikeout
-counts already derivable from pitcher_pa_model/data.csv (PA-grain, SP-only).
+counts already derivable from diagnostics/data.csv (PA-grain, SP-only).
 Feeds pitcher_view.py's season line chart. Not a model feature -- pitches
 thrown per game is a REALIZED in-game stat, never fed to v6.
 
 Run from repo root with:
-    PYTHONPATH=src python pitcher_pa_model/build_game_log.py
+    PYTHONPATH=src python src/models/k_predictor/diagnostics/build_game_log.py
 Requires AWS credentials with read access to s3://mlbdk (us-east-2), and
-pitcher_pa_model/data.csv (run build_data.py first).
+diagnostics/data.csv (run build_data.py first).
 """
 from pathlib import Path
 
@@ -18,7 +18,7 @@ import pandas as pd
 import yaml
 
 OUT_DIR = Path(__file__).parent
-K_PREDICTOR_DIR = Path(__file__).resolve().parent.parent / "src" / "models" / "k_predictor"
+K_PREDICTOR_DIR = Path(__file__).resolve().parent.parent
 
 with open(K_PREDICTOR_DIR / "config.yaml") as f:
     cfg = yaml.safe_load(f)

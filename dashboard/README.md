@@ -2,6 +2,8 @@
 
 Personal dashboard for MLB DraftKings prop research. Reads from the `mlbdk` S3 bucket — no separate database.
 
+![Dashboard overview](docs/screenshots/hero.png)
+
 ## Quick start
 
 ```bash
@@ -77,6 +79,8 @@ Three cards showing whether each Lambda ran successfully and on time:
 
 Each card shows: run date · duration · games processed per step · any error. A summary bar below shows `2/3 ok · 1 stale`.
 
+![Pipeline status cards](docs/screenshots/pipeline_status.png)
+
 ### Season Data Completeness [done]
 
 Audits the current season's schedule against the three prepared tables
@@ -87,6 +91,10 @@ a Lambda can report success every day while a table is still missing games from
 weeks ago (a partial write, a since-fixed bug, a backfill gap). Backed by
 `completeness_audit.py`; reused from the same audit tool built for
 `k_predictor`'s 2026 data validation.
+
+![Season data completeness](docs/screenshots/season_completeness.png)
+
+**Known limitation:** this audit reads a full season's Parquet for four tables on every request with no caching — it takes roughly 40 seconds to respond. Fine for a manual check, not fine if this section is ever made to auto-refresh.
 
 ### Stage 2 — Today's Slate [done]
 
@@ -100,6 +108,8 @@ Game table sorted by CT game time. Columns:
 | Odds | `raw_data/odds/team_odds/` | run line + total, parsed by `game_odds.py`; dash if missing |
 | Prediction | — | Links down to Stage 3's matching game group |
 
+![Today's slate](docs/screenshots/todays_slate.png)
+
 ### Stage 3 — Starting Pitcher Predictions [scaffolded, sample data]
 
 One row per starting pitcher (batters faced, strikeouts, early-out probability,
@@ -110,6 +120,10 @@ path yet (Layer 6 in `CLAUDE.md`'s architecture is not started) — but everythi
 around them is real: the games are today's actual schedule, and the devig/edge
 math (`betting_edge.py`) is the same code a real model would feed. Swapping in
 real predictions later touches only `starting_pitcher_predictions.py`.
+
+![Starting pitcher predictions](docs/screenshots/starting_pitcher_predictions.png)
+
+Pitcher names show as "TBD" — the placeholder data doesn't yet resolve today's real probable starters, only the game/team pairing. That's the other gap left before this section could show real names, ahead of a real model even existing.
 
 ### Stage 4 — Bet Recommendations [not started]
 

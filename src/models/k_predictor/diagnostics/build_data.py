@@ -15,7 +15,7 @@ cascade (poisson_binomial_pmf etc.), and reads only TRAIN_SEASONS (2025 is
 already in there) since there's no need to score 2026 here.
 
 Run from repo root with:
-    PYTHONPATH=src python pitcher_pa_model/build_data.py
+    PYTHONPATH=src python src/models/k_predictor/diagnostics/build_data.py
 Requires AWS credentials with read access to s3://mlbdk (us-east-2).
 """
 from pathlib import Path
@@ -41,8 +41,7 @@ from models.hit_predictor.processing.features import expected_role
 import models.k_predictor.processing.pipeline as pipeline
 from models.k_predictor.processing.features.pitcher_workload import build_pitcher_shrunk_whip
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-K_PREDICTOR_DIR = REPO_ROOT / "src" / "models" / "k_predictor"
+K_PREDICTOR_DIR = Path(__file__).resolve().parent.parent
 WHIP_SHRINKAGE_K = 20.0
 SHORT_PITCHER_WINDOW = 3
 SHORT_TEAM_WINDOW = 5

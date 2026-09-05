@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 # Ensure repo root is on sys.path so shared/ is importable regardless of CWD
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from shared.model_dashboard import run_dashboard
 

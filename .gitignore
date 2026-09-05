@@ -32,12 +32,19 @@ terraform/*.tfstate.backup
 *.pdf
 *.svg
 !docs/**/*.svg
+!dashboard/docs/**/*.png
 /plots/
 /figures/
 /outputs/
 
 # MLflow local tracking store
 mlruns/
+
+# Generated run-comparison reports (utils/run_comparison.py output)
+/reports/
+
+# Session-export HTML artifacts
+/.lavish/
 
 # Python
 __pycache__/

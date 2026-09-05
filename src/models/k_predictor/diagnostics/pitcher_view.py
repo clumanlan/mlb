@@ -12,8 +12,8 @@ for one page, not remove duplication (same judgment call as this project's
 backtest/experiment scripts being copy-adapted rather than shared).
 
 Run from repo root with:
-    streamlit run pitcher_pa_model/pitcher_view.py
-Requires pitcher_pa_model/data.csv and game_log.csv (run build_data.py and
+    streamlit run src/models/k_predictor/diagnostics/pitcher_view.py
+Requires diagnostics/data.csv and game_log.csv (run build_data.py and
 build_game_log.py first).
 """
 from pathlib import Path

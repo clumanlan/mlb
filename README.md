@@ -106,7 +106,6 @@ Weaker candidates considered and set aside: player rest-day/will-not-start (usef
 - `dashboard/README.md` — the pre-game dashboard: pipeline health, slate, data-completeness checks
 - `src/models/hit_predictor/BENCHMARKS.md` — full experiment results table, what "beating baseline" means here
 - `src/models/hit_predictor/FEATURE_GLOSSARY.md` — every feature, implemented or not
-- `CODEBASE.md` — infra reference: ingestion → processing → feature store, S3 layout
-- `CLAUDE.md` — repo conventions (TDD requirement, commands, test layout)
+- `CLAUDE.md` — repo conventions, infra reference (ingestion → processing → feature store, S3 layout), commands, test layout
 
 **Non-goal right now:** proving this beats the market. The bar is "real, defensible signal" — the economic/CLV layer (comparing model output against DraftKings' actual de-vigged prices) is deliberately deferred until there's a model worth staking behind.

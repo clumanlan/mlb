@@ -15,8 +15,8 @@ entry.
 Point-in-time safety: for each of the 196 backtest starts in
 pred_df_test2025.parquet, the naive mean/median is computed from that same
 pitcher's 2025 starts STRICTLY BEFORE that game's date only (expanding
-window), using pitcher_pa_model/game_log.csv (already covers the full 2025
-season, built by pitcher_pa_model/build_game_log.py). True cold starts (zero
+window), using diagnostics/game_log.csv (already covers the full 2025
+season, built by diagnostics/build_game_log.py). True cold starts (zero
 prior 2025 starts -- unavoidable for a pitcher's first outing of the season)
 are excluded from the naive comparison and reported separately, same
 convention as this project's other cold-start handling (e.g. FEATURE_SEASONS
@@ -25,7 +25,7 @@ carrying prior-season rate stats forward).
 Run from src/models/k_predictor/ with:
     python backtest/naive_history_baseline.py
 No AWS credentials needed -- reads pred_df_test2025.parquet and
-../../../../pitcher_pa_model/game_log.csv, both already on disk.
+../diagnostics/game_log.csv, both already on disk.
 """
 from pathlib import Path
 
@@ -33,9 +33,9 @@ import numpy as np
 import pandas as pd
 
 BACKTEST_DIR = Path(__file__).parent
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
+K_PREDICTOR_DIR = Path(__file__).resolve().parent.parent
 PRED_PATH = BACKTEST_DIR / "pred_df_test2025.parquet"
-GAME_LOG_PATH = REPO_ROOT / "pitcher_pa_model" / "game_log.csv"
+GAME_LOG_PATH = K_PREDICTOR_DIR / "diagnostics" / "game_log.csv"
 MIN_PRIOR_STARTS = 1  # below this, "naive" has nothing to read off -- exclude, don't impute
 
 

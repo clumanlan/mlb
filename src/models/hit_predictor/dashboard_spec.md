@@ -36,7 +36,7 @@ project/
 │   ├── dashboard.py              # ~15-line driver: CONFIG + run_dashboard(CONFIG)
 │   ├── data.csv
 │   └── ...
-├── pitcher_pa_model/
+├── src/models/k_predictor/diagnostics/
 │   ├── dashboard.py              # same shape, different CONFIG
 │   └── ...
 ├── shared/
