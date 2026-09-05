@@ -37,22 +37,30 @@ A batter gets ~4 plate appearances in a game, and once contact is made, the outc
 
 ---
 
-## Models: baseline vs. current
+## The prop matrix
 
-Every model is checked against a naive floor first (`utils/eval.py::summarize_verdict` — `real_improvement` / `overconfidence_risk` / `calibration_only` / `no_improvement`, computed from reliability + resolution at the grain a DK prop actually resolves on, not log_loss/ROC-AUC alone). Full experiment history: `DECISIONS.md`.
+Every "simple" prop this project targets is one of three per-plate-appearance classifiers — hit, walk, strikeout (home run not yet built) — rolled up two different ways: grouped by batter (needs `n_pa_predictor`'s PA-count estimate) for a batter prop, or grouped by pitcher (needs `batters_faced_predictor`'s estimate) for the "allowed" version of the same prop. Outs recorded isn't its own model — it falls out of batters faced minus hits and walks allowed.
 
-| Model | DK prop | Naive floor | First real model (baseline) | Current best | Verdict |
-|---|---|---|---|---|---|
-| `hit_predictor` | Hit / no-hit per PA | Game-grain resolution 0.0182, ROC-AUC 0.6448 | v1–v5 XGBoost/RF, all flat vs. naive | Statistical shrinkage cascade (v2, in-season-blended) — resolution 0.0162, ROC-AUC 0.6507 | Still short of naive on resolution — best result so far is `real_improvement` **vs. earlier baselines**, not vs. naive |
-| `k_predictor` (K-prop) | Strikeout per PA → total K | PA-grain PR-AUC 0.226 | LR, PR-AUC 0.270 | v6 tuned XGBoost, PR-AUC 0.284; game-grain resolution 0.0137 vs. naive's 0.0045 | `real_improvement` vs. naive — but confirmed calibration bug + no edge vs. real 2026 market odds |
-| `bb_predictor` (BB-prop) | Walk per PA | PA-grain PR-AUC 0.076 | LR, PR-AUC 0.096 | Still the v1 baseline (rolling walk rate added nothing) | `overconfidence_risk` at game grain |
-| `n_pa_predictor` (`low_pa`) | Batter ≤3 PA in a game | PR-AUC 0.394 (per-slot historical rate) | — (went straight to classifier reframe) | XGBoost @ 0.85 confidence → 64.7% precision, 95% CI [55.6%, 72.8%] | Real, CI-verified lift; locked as the production operating point |
-| `short_outing_predictor` | SP ≤4 IP | PR-AUC 0.309 (per-innings-bucket rate) | LR, PR-AUC 0.420 — widest naive-beating margin of any model here | v1 (+trailing-3-start IP trend, rest days), PR-AUC 0.440 | `overconfidence_risk` at start grain |
-| `batters_faced_predictor`* | — supporting infra | Shrinkage cascade, MAE 2.861 | Tuned XGBoost, MAE 2.741 | v2 (+workload trend, rest days), MAE 2.647 | `real_improvement` vs. the cascade — not yet switched into production |
+![The Prop Matrix](docs/prop_matrix.svg)
 
-\* Not a standalone DK prop — its target (`realized_batters_faced`) is a candidate replacement for the shrinkage cascade that `k_predictor`'s total-strikeout prediction already depends on.
+Two things this makes visible that the numbers alone don't: **Pitcher Hits Allowed and Pitcher Walks Allowed need zero new modeling** — both classifiers and the count model already exist, nobody has combined them — and **"built" doesn't currently mean production-ready for anything except `k_predictor`**. `hit_predictor` and `bb_predictor`'s existing game-level checks are backtests against the *realized* plate-appearance count from the box score, not something computable before a game actually starts.
 
-Weaker candidates considered and set aside: player rest-day/will-not-start (useful as a feature, not a standalone target), stolen-base attempts (narrow population, smaller market), home-run props (power is skill-driven, but still has real batted-ball/weather variance — not clearly better than the hit problem above).
+## Models ranked by performance vs. naive
+
+Ranked by verdict tier first (`real_improvement` beats `overconfidence_risk` beats "hasn't cleared naive"), then by relative lift within a tier. Metrics differ by model (PR-AUC, precision, MAE, resolution) — treat this as directional, not a literal cross-model comparison. Full experiment history: `DECISIONS.md`.
+
+| Rank | Model | Bin | Performance vs. naive |
+|---|---|---|---|
+| 1 | `n_pa_predictor` (`low_pa`) | Batter | 19.8% base rate → 64.7% precision @ 0.85 confidence (+45pp, ~3.3x) — `real_improvement`, threshold already locked |
+| 2 | `k_predictor` (K-prop) | Pitcher | PR-AUC 0.226 → 0.284 (+26%) — `real_improvement`, but confirmed no edge against real 2026 market odds |
+| 3 | `batters_faced_predictor`* | Pitcher (infra) | MAE 2.861 → 2.647 (-7.5%) — `real_improvement`, but vs. the cascade formula, not naive |
+| 4 | `short_outing_predictor` | Pitcher | PR-AUC 0.309 → 0.440 (+42%) — the largest raw lift of any model here, but `overconfidence_risk` |
+| 5 | `bb_predictor` (BB-prop) | Pitcher | PR-AUC 0.076 → 0.096 (+26%) — `overconfidence_risk` |
+| 6 | `hit_predictor` | Batter | Resolution 0.0182 → 0.0162 (-11%, worse) — still hasn't beaten naive |
+
+\* Not a standalone DK prop — supporting infra for `k_predictor`'s total-strikeout rollup.
+
+Weaker candidates considered and set aside: player rest-day/will-not-start (useful as a feature, not a standalone target), stolen-base attempts (narrow population, smaller market).
 
 ---
 

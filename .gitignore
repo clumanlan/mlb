@@ -31,6 +31,7 @@ terraform/*.tfstate.backup
 *.jpeg
 *.pdf
 *.svg
+!docs/**/*.svg
 /plots/
 /figures/
 /outputs/
