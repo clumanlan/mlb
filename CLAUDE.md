@@ -191,9 +191,9 @@ raw_data/odds/player_props/{year}/{date}.parquet
 
 **SSM parameters:**
 - `/mlb/odds-api/api-key` — SecureString, API key for api.the-odds-api.com
-- `/mlb/odds-api/requests-used/{year}/{month}` — running monthly request count (limit: 500)
+- `/mlb/odds-api/requests-used/{year}/{month}` — running monthly request count (limit: 20,000, since the 2026-08-27 plan upgrade)
 
-**Quota behavior:** warns at 90% (450 calls), hard-stops at 100% (500 calls), returns 500 with "quota" in body.
+**Quota behavior:** warns at 90% (18,000 calls), hard-stops at 100% (20,000 calls), raises an exception with "quota" in the message.
 
 **Smoke test:**
 ```bash
@@ -310,6 +310,7 @@ Integration test approach: moto mocks AWS (S3 + SSM), `unittest.mock.patch` mock
 
 ## Known Issues / Deferred Work
 
+- **[fixed 2026-09-05]** `daily_odds_fetch`'s `QUOTA_LIMIT` constant was left at the old free-tier value of 500 after the 2026-08-27 upgrade to the 20K plan (see the 2026-08-27 entry below), so the Lambda hard-stopped for real once usage crossed 500 on 2026-09-02 — it ran successfully 2026-08-27 through 2026-09-01, then failed every day from 2026-09-02 through 2026-09-05 with `"Monthly quota reached (1369/500)"` despite the account having ~18,600 credits of real headroom left. This is what made the dashboard's odds column and starting-pitcher predictions look stale — `raw_data/odds/team_odds` and `player_props` simply stopped writing. Fixed in code (`QUOTA_LIMIT = 20000`, TDD'd via `tests/test_daily_odds_fetch_handler.py::TestQuotaLimitConfig`), deployed via `make deploy-odds-fetch`, and confirmed live with a manual invoke for 2026-09-05 (`team_odds: 12, player_props: 12`, `status: success`). No backfill needed — the gap is only 2026-09-02 through 2026-09-04.
 - **Status writer IAM** — Lambda execution roles need `s3:PutObject` on `arn:aws:s3:::mlbdk/lambdas/status/*`; not yet added to Terraform
 - **`daily_feature_create` status writer** — not yet integrated; needs the same try/except pattern as the other three Lambdas; `games_processed` keys TBD once the handler bugs are fixed
 - **[fixed 2026-08-26]** `daily_odds_fetch`'s handler used to catch all exceptions and return `{"statusCode": 500, ...}` instead of re-raising, which meant the DLQ and `odds_errors` CloudWatch alarm (both wired to Lambda's native `Errors` metric / unhandled-exception accounting) never fired despite the Lambda failing daily for 9+ days — both alarms sat at `OK` and the DLQ stayed empty the whole time. Handler now re-raises after `write_status`, matching the other three Lambdas' pattern.

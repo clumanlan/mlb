@@ -2,6 +2,19 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 
+class TestQuotaLimitConfig:
+    def test_quota_limit_matches_current_20k_plan(self):
+        """
+        The Odds API plan was upgraded from 500 to 20,000 credits/month on 2026-08-27
+        (see CLAUDE.md's Known Issues / Deferred Work), but this constant was never
+        updated — the Lambda has been hard-stopping on the old 500 ceiling since usage
+        crossed it on 2026-09-02, blocking odds fetches for four days straight even
+        though the account had ~18,600 credits of real headroom left.
+        """
+        from handler import QUOTA_LIMIT
+        assert QUOTA_LIMIT == 20000
+
+
 class TestFetchAndStore:
     def test_fetch_and_store_writes_team_odds_to_s3(self):
         fake_team_odds = [{"id": "g1", "home_team": "Red Sox", "away_team": "Yankees", "bookmakers": []}]

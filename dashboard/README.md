@@ -51,9 +51,21 @@ All targets live in the root `mlb/Makefile` and are run from `mlb/`.
 
 ---
 
+## Current status (2026-09-05)
+
+The dashboard's odds column and starting-pitcher K lines looked stale from
+2026-09-02 through 2026-09-05: `daily_odds_fetch` was hard-stopping on a
+leftover 500-credit quota check even though the account was upgraded to a
+20,000-credit plan on 2026-08-27. Fixed (`QUOTA_LIMIT = 20000` in
+`src/lambdas/daily_odds_fetch/handler.py`, TDD'd via
+`tests/test_daily_odds_fetch_handler.py::TestQuotaLimitConfig`), deployed, and
+confirmed live — the 2026-09-05 fetch succeeded (`team_odds: 12, player_props: 12`).
+No backfill needed for the 3-day gap. See `CLAUDE.md`'s Known Issues section
+for the full writeup.
+
 ## What's built
 
-### Stage 1 — Data Pipeline Status (done)
+### Stage 1 — Data Pipeline Status [done]
 
 Three cards showing whether each Lambda ran successfully and on time:
 
@@ -65,7 +77,18 @@ Three cards showing whether each Lambda ran successfully and on time:
 
 Each card shows: run date · duration · games processed per step · any error. A summary bar below shows `2/3 ok · 1 stale`.
 
-### Stage 2 — Today's Slate (done)
+### Season Data Completeness [done]
+
+Audits the current season's schedule against the three prepared tables
+`k_predictor`'s feature pipeline depends on (`batter_boxscore`, `pitcher_boxscore`,
+`playbyplay`), flagging any game the schedule says was played but a downstream
+table never picked up. This catches gaps a green pipeline-status card can miss —
+a Lambda can report success every day while a table is still missing games from
+weeks ago (a partial write, a since-fixed bug, a backfill gap). Backed by
+`completeness_audit.py`; reused from the same audit tool built for
+`k_predictor`'s 2026 data validation.
+
+### Stage 2 — Today's Slate [done]
 
 Game table sorted by CT game time. Columns:
 
@@ -73,12 +96,22 @@ Game table sorted by CT game time. Columns:
 |---|---|---|
 | Time (CT) | Schedule | UTC converted to Central Time |
 | Matchup | Schedule | Away @ Home |
-| Lineup | `raw_data/lineups/states/` | CONFIRMED / PENDING / SKIPPED |
-| Odds | `raw_data/odds/team_odds/` | shown if present, dash if missing |
-| Prediction | — | Placeholder for Stage 3 |
+| Lineup | `raw_data/games/lineups/states/` | CONFIRMED / PENDING / SKIPPED |
+| Odds | `raw_data/odds/team_odds/` | run line + total, parsed by `game_odds.py`; dash if missing |
+| Prediction | — | Links down to Stage 3's matching game group |
 
-### Stage 3 — Model Predictions (not yet built)
-### Stage 4 — Bet Recommendations (not yet built)
+### Stage 3 — Starting Pitcher Predictions [scaffolded, sample data]
+
+One row per starting pitcher (batters faced, strikeouts, early-out probability,
+DK strikeout line, and model-vs-market edge), grouped by game so it lines up
+with Stage 2. The prediction numbers are fixed placeholders — `batters_faced_predictor`,
+`k_predictor`, and `short_outing_predictor` don't have a production inference
+path yet (Layer 6 in `CLAUDE.md`'s architecture is not started) — but everything
+around them is real: the games are today's actual schedule, and the devig/edge
+math (`betting_edge.py`) is the same code a real model would feed. Swapping in
+real predictions later touches only `starting_pitcher_predictions.py`.
+
+### Stage 4 — Bet Recommendations [not started]
 
 ---
 
@@ -90,6 +123,9 @@ Game table sorted by CT game time. Columns:
 | `GET /api/pipeline-status` | Three Lambda cards + summary |
 | `GET /api/today-slate` | Today's games with lineup + odds |
 | `GET /api/today-slate?date=YYYY-MM-DD` | Games for a specific date (useful for debugging) |
+| `GET /api/season-completeness` | Current season's schedule vs. prepared-table coverage |
+| `GET /api/season-completeness?year=YYYY` | Completeness audit for a specific season |
+| `GET /api/starting-pitcher-predictions` | Today's starters with batters-faced/K/early-out predictions + K-line edge — sample data, see Stage 3 above |
 
 Interactive docs: http://localhost:8000/docs
 
@@ -106,8 +142,11 @@ lambdas/status/{function_name}/{date}.json   → pipeline status cards
 raw_data/schedule/{year}/{date}.json         → slate schedule (daily_schedule_fetch)
 raw_data/games/schedule/{year}/schedule_{date}.parquet  → fallback (daily_mlb_fetch)
 
-raw_data/lineups/states/{year}/{date}.json   → lineup confirmation states
-raw_data/odds/team_odds/{year}/{date}.parquet → team odds (DraftKings book)
+raw_data/games/lineups/states/{year}/{date}.json → lineup confirmation states
+raw_data/odds/team_odds/{year}/{date}.parquet    → team odds (DraftKings book), also feeds the K-line edge calc
+
+processed_data/games/schedule/{year}/{date}.parquet          → season-completeness audit: source of truth
+processed_data/prepared/{batter_boxscore,pitcher_boxscore,playbyplay}/{year}/{date}.parquet → season-completeness audit: coverage checked against these
 ```
 
 **Schedule fallback:** the route tries the new JSON path first (`daily_schedule_fetch`), then falls back to the legacy Parquet path (`daily_mlb_fetch`). The dashboard shows real game data even before `daily_schedule_fetch` is deployed to production.
@@ -121,18 +160,28 @@ dashboard/
 ├── Makefile                  # dev, test, stop targets
 ├── README.md
 ├── backend/
-│   ├── main.py               # FastAPI app — all routes and business logic
-│   ├── s3_client.py          # boto3 helpers: get_latest_s3_json, get_s3_json, get_s3_parquet
+│   ├── main.py                        # FastAPI app — all routes
+│   ├── s3_client.py                   # boto3 helpers: get_latest_s3_json, get_s3_json, get_s3_parquet, read_s3_parquet_season
+│   ├── completeness_audit.py          # season schedule vs. prepared-table coverage
+│   ├── starting_pitcher_predictions.py # placeholder predictions attached to today's real schedule
+│   ├── betting_edge.py                # devig (American odds → fair probability) + edge math
+│   ├── game_odds.py                   # parses DraftKings bookmaker JSON into run line + total
 │   ├── requirements.txt
-│   ├── pytest.ini            # sets pythonpath and testpaths for the backend
-│   ├── .env.example          # copy to .env and fill in AWS credentials
+│   ├── pytest.ini                     # sets pythonpath and testpaths for the backend
+│   ├── .env.example                   # copy to .env and fill in AWS credentials
 │   └── tests/
-│       ├── conftest.py       # sys.path setup, integration marker, run_date fixture
-│       ├── test_app.py       # health endpoint
-│       ├── test_s3_client.py # unit tests for all three S3 helpers (28 total)
-│       ├── test_pipeline_status.py  # staleness logic + route tests
-│       ├── test_today_slate.py      # UTC→CT, schedule join, odds join
-│       └── test_integration.py      # real S3 smoke tests (--date flag)
+│       ├── conftest.py                     # sys.path setup, integration marker, run_date fixture
+│       ├── test_app.py                     # health endpoint
+│       ├── test_s3_client.py               # unit tests for all S3 helpers
+│       ├── test_pipeline_status.py         # staleness logic + route tests
+│       ├── test_today_slate.py             # UTC→CT, schedule join, odds join
+│       ├── test_completeness_audit.py      # coverage diff logic
+│       ├── test_season_completeness_route.py
+│       ├── test_starting_pitcher_predictions.py
+│       ├── test_starting_pitcher_predictions_route.py
+│       ├── test_game_odds.py
+│       ├── test_betting_edge.py
+│       └── test_integration.py             # real S3 smoke tests (--date flag)
 └── frontend/
     ├── index.html
     ├── vite.config.js        # proxies /api/* to localhost:8000
@@ -141,9 +190,13 @@ dashboard/
         ├── main.jsx          # React entry point
         ├── App.jsx           # root layout — header + section list
         ├── index.css         # CSS variables, all shared styles
+        ├── lib/
+        │   └── gameColor.js  # per-game color assigned by game_pk, shared across sections
         └── components/
-            ├── PipelineStatus.jsx   # Section 1 — three pipeline cards
-            └── TodaysSlate.jsx      # Section 2 — game table
+            ├── PipelineStatus.jsx             # Stage 1 — three pipeline cards
+            ├── SeasonCompleteness.jsx         # Season Data Completeness
+            ├── TodaysSlate.jsx                # Stage 2 — game table
+            └── StartingPitcherPredictions.jsx # Stage 3 — sample predictions
 ```
 
 ---
@@ -157,5 +210,5 @@ make dashboard-test-int                    # integration, uses yesterday
 make dashboard-test-int DATE=2026-05-09   # integration, specific date
 ```
 
-Unit test count: **28 passing**  
+Unit test count: **74 passing**
 Integration test count: **8 passing** (against real S3 data)

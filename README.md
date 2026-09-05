@@ -37,6 +37,8 @@ flowchart TD
 
 Layer 3's feature functions are tested and reusable, but every model still re-pulls and rebuilds full-season data in a one-off script rather than a scheduled incremental job — see `CLAUDE.md` for the full layer breakdown.
 
+A FastAPI + React dashboard (`dashboard/`, `make dashboard-dev`) surfaces this day-to-day: Lambda run status and staleness, today's slate, season data-completeness, and a starting-pitcher predictions table (sample data, real games — no inference path yet). See `dashboard/README.md` for what's built.
+
 **Model split, consistent across all six models below:** train on seasons `[2017, 2018, 2019, 2022, 2023, 2024, 2025]` minus val/test, val = 2024 (iterated against during development), test = 2025 (locked, never touched until a model is final). `k_predictor` additionally has a live 2026 real-market backtest (66 dates, 1,160 starts matched against real DraftKings lines) — the only check in this repo against real prices rather than a naive floor.
 
 ---
@@ -101,6 +103,7 @@ Weaker candidates considered and set aside: player rest-day/will-not-start (usef
 **Read next**, depending on what you're after:
 - `ROADMAP.md` — the living plan: current priorities and backlog
 - `DECISIONS.md` — dated history of every session's findings and corrections
+- `dashboard/README.md` — the pre-game dashboard: pipeline health, slate, data-completeness checks
 - `src/models/hit_predictor/BENCHMARKS.md` — full experiment results table, what "beating baseline" means here
 - `src/models/hit_predictor/FEATURE_GLOSSARY.md` — every feature, implemented or not
 - `CODEBASE.md` — infra reference: ingestion → processing → feature store, S3 layout

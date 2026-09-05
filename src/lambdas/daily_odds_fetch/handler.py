@@ -9,7 +9,7 @@ from odds_quota import check_quota, set_monthly_usage
 from odds_fetch import get_all_player_props, get_team_odds, get_last_usage
 from status_writer import write_status
 
-QUOTA_LIMIT = 500
+QUOTA_LIMIT = 20000
 WARN_THRESHOLD = 0.9
 S3_BUCKET = "mlbdk"
 
