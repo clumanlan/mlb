@@ -1,6 +1,6 @@
 # Baseball PA Model Dashboard — Spec
 
-**Status: implemented.** Built at top-level `batter_pa_model/` (driver) + `shared/model_dashboard/` (portable package), per the acceptance criteria at the bottom of this doc. Kept as a reference for the design rationale (why each module is/isn't tested, the 3-step error-analysis framework) rather than as a pending to-do — read it to understand *why* the dashboard is shaped this way, not as a build checklist.
+**Status: implemented.** Built at `src/models/hit_predictor/diagnostics/` (driver, moved from top-level `batter_pa_model/` on 2026-09-05 — see `DECISIONS.md`) + `shared/model_dashboard/` (portable package), per the acceptance criteria at the bottom of this doc. Kept as a reference for the design rationale (why each module is/isn't tested, the 3-step error-analysis framework) rather than as a pending to-do — read it to understand *why* the dashboard is shaped this way, not as a build checklist.
 
 A reusable Streamlit dashboard for diagnosing per-plate-appearance binary classification models (batter hit/no-hit, pitcher K/no-K). Targeted TDD on the math that's hard to eyeball; everything else built and verified visually. Built portable from the start — the same dashboard is meant to serve every model in the planned multi-model system (see `CLAUDE.md`'s "Model Layer" section), not just `hit_predictor`.
 
@@ -32,7 +32,7 @@ If something breaks later in a non-obvious way, *that's* when you add a regressi
 
 ```
 project/
-├── batter_pa_model/
+├── src/models/hit_predictor/diagnostics/
 │   ├── dashboard.py              # ~15-line driver: CONFIG + run_dashboard(CONFIG)
 │   ├── data.csv
 │   └── ...
@@ -291,7 +291,7 @@ Display label: "95% CI (bootstrap, assumes within-season exchangeability)"
 3. **Build the rest of `logic/`** without tests
 4. **Build `plots/`** without tests
 5. **Build `components/` and `app.py`** without tests
-6. **Smoke test** with `streamlit run batter_pa_model/dashboard.py`
+6. **Smoke test** with `streamlit run src/models/hit_predictor/diagnostics/dashboard.py`
 7. **Verify portability** by copying to pitcher folder and changing CONFIG
 
 ---
@@ -314,7 +314,7 @@ Display label: "95% CI (bootstrap, assumes within-season exchangeability)"
 The dashboard is done when:
 
 1. `pytest tests/model_dashboard/` passes (3 test files, all green)
-2. `streamlit run batter_pa_model/dashboard.py` launches and all three tabs render
+2. `streamlit run src/models/hit_predictor/diagnostics/dashboard.py` launches and all three tabs render
 3. Switching to pitcher model = copy folder, change ~3 CONFIG lines, point at new CSV
 4. Bootstrap CI completes in < 5 seconds for 50k row test set
 5. Every panel has a description block above it

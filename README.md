@@ -2,6 +2,8 @@
 
 An ML system for MLB prop research (DraftKings): ingest game/odds data, build point-in-time-safe features, and test whether any prediction target here clears a naive baseline before it's treated as real signal.
 
+![Pre-game dashboard](dashboard/docs/screenshots/hero.png)
+
 ---
 
 ## Data

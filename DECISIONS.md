@@ -6,6 +6,12 @@ See `ROADMAP.md` for current priorities, the open backlog, and what's next — t
 
 ---
 
+## 2026-09-05 — `batter_pa_model/` moved from repo root into `src/models/hit_predictor/diagnostics/`
+
+Follow-up to the `pitcher_pa_model/` move directly below, same day. The entry below argued `batter_pa_model/` should stay at root because it's "genuinely shared across models via `shared/model_dashboard/`" — that reasoning conflated the portable package (`shared/model_dashboard/`, which does stay shared) with the driver script (`dashboard.py` + its `data.csv`), which is not shared at all: its `CONFIG` (`target: is_hit`, `entity: batter_name`, batter/pitcher-hand slice cols) is hit_predictor-specific in exactly the way `pitcher_pa_model/dashboard.py`'s `CONFIG` is k_predictor-specific. Same root-clutter problem as the pitcher case: a hit_predictor-only driver sitting at repo root next to real top-level models made it look like a standalone model.
+
+Moved `dashboard.py` and `data.csv` (both git-tracked, not gitignored here) to `src/models/hit_predictor/diagnostics/` via `git mv`. Updated the `sys.path` repo-root lookup in `dashboard.py` (now 4 levels up instead of 1, matching `k_predictor/diagnostics/dashboard.py`'s `parents[4]` pattern) and every reference in `src/models/hit_predictor/dashboard_spec.md` (architecture tree, smoke-test/acceptance-criteria `streamlit run` commands) and `CLAUDE.md`. No behavior change — same driver, same config, just relocated.
+
 ## 2026-09-05 — `pitcher_pa_model/` moved from repo root into `src/models/k_predictor/diagnostics/`
 
 Repo-root cleanup pass. `pitcher_pa_model/` (`build_data.py`, `build_game_log.py`, `dashboard.py`, `pitcher_view.py`, plus gitignored `data.csv`/`game_log.csv`) never trained anything of its own — it's diagnostic tooling that scores and visualizes k_predictor v6's already-trained PA-level predictions (see the 2026-09-03 entry above for what it produced). Sitting at repo root next to real top-level models made it look like a standalone model in progress, which it isn't — everything in it is k_predictor-specific, unlike `batter_pa_model/` (still at root — genuinely shared across models via `shared/model_dashboard/`, no k_predictor-only content).

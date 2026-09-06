@@ -1,0 +1,37 @@
+
+Loading cached PA-grain frame from /Users/clumanlan/projects/mlb/src/models/k_predictor/experiments/count_distribution_check/_model_cache/model_df_v6.parquet...
+Loaded 733,275 rows, 48 columns, seasons [np.int64(2017), np.int64(2018), np.int64(2019), np.int64(2022), np.int64(2023), np.int64(2024), np.int64(2025)]
+Feature count: 42 (v6 pre-game features only, no in-game context)
+Fit pool (all FIT_SEASONS): 411,861 rows  |  VAL_SEASON=2024: 105,265 rows
+Stratified subsample for TabPFN + xgb_subsample: 8,000 rows (target rate 0.2182 vs full-pool 0.2183)
+
+Fitting xgb_subsample (max_depth=2, learning_rate=0.03, early-stopped on 10% of the subsample)...
+best_iteration=95
+
+Fitting TabPFN on the same subsample...
+TabPFN fit time: 1.0s
+
+Scoring TabPFN on VAL_SEASON (105,265 rows) in batches...
+  2,000/105,265 rows scored (27.4s elapsed)
+  12,000/105,265 rows scored (126.3s elapsed)
+  22,000/105,265 rows scored (226.0s elapsed)
+  32,000/105,265 rows scored (326.5s elapsed)
+  42,000/105,265 rows scored (426.5s elapsed)
+  52,000/105,265 rows scored (526.3s elapsed)
+  62,000/105,265 rows scored (624.8s elapsed)
+  72,000/105,265 rows scored (723.0s elapsed)
+  82,000/105,265 rows scored (819.5s elapsed)
+  92,000/105,265 rows scored (915.3s elapsed)
+  102,000/105,265 rows scored (1011.6s elapsed)
+TabPFN inference total time: 1049.1s
+
+==============================================================================
+RESULT -- VAL_SEASON=2024, 105,265 PA rows, 42 pre-game features
+==============================================================================
+Model                                     Train rows    PR-AUC   ROC-AUC
+TabPFN (subsample)                             8,000    0.2790    0.5957
+XGBoost (same subsample)                       8,000    0.2743    0.5891
+XGBoost v6 (full pool, reference)            411,861    0.2838    0.5996
+
+Apples-to-apples delta (TabPFN - XGBoost, same 8,000-row subsample): PR-AUC +0.0047  ROC-AUC +0.0066
+EXIT_CODE:0
