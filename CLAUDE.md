@@ -80,8 +80,8 @@ raw_data/odds/{team_odds,player_props}/{year}/{date}.parquet
 reference/player_info/player_info.parquet          ← not date-partitioned
 processed_data/games/{table}/{year}/{date}.parquet
 processed_data/prepared/{batter_boxscore,pitcher_boxscore,playbyplay}/{year}/{date}.parquet
+processed_data/season_summaries/{batter_season_summary,sp_season_summary,team_season_summary}/game_season={year}/*.parquet  ← not currently read by any model, kept as-is (see Feature Engineering section)
 features/offline/{batter_features,pitcher_features}/{year}/{date}.parquet
-feast/features/{team_batter_base,player_batter_base,starting_pitcher_base,bullpen_pitcher_base}/{year}/{date}.parquet
 lambdas/status/{function_name}/{date}.json         ← observability, always production path
 ```
 
@@ -161,7 +161,7 @@ Runs daily at 10 AM UTC (5 AM EST) via EventBridge → Step Functions.
 |---|---|---|
 | `daily_mlb_fetch` | `src/lambdas/daily_mlb_fetch/handler.py` | Fetches from MLB Stats API, writes raw Parquet to S3 |
 | `daily_process_data` | `src/lambdas/daily_process_data/handler.py` | Cleans + joins raw tables, writes processed and prepared tables |
-| `daily_feature_create` | `src/lambdas/daily_feature_create/handler.py` | Runs all feature transforms, writes snapshots, materializes into Feast |
+| `daily_feature_create` | `src/lambdas/daily_feature_create/handler.py` | Never fully deployed — imports the first-generation feature transforms deleted 2026-09-15 (see `DECISIONS.md`). Needs a rewrite pointing at the current transforms (`src/features/transforms/`) before this row is accurate again; tracked in `ROADMAP.md`'s Production plan, step 3 |
 
 Each accepts `{date: "YYYY-MM-DD", env: "test"}` — `env: test` routes all S3 reads/writes under a `test/` prefix, leaving production data untouched.
 
@@ -217,15 +217,24 @@ A second, unrelated gotcha: individual events can 404 on the per-event historica
 
 ## Feature Engineering
 
-`src/features/transforms/` contains one file per feature group:
+**2026-09-15: this section was rewritten after deleting a first-generation feature-store attempt that never made it to production.** `src/features/transforms/` used to hold 4 original feature-group files (`team_batter_base.py`, `player_batter_base.py`, `starting_pitcher_base.py`, `bullpen_pitcher_base.py`), a `jobs/` (nee `backfill/`) folder of one-off CLI loaders for them, and `compute_season_summaries.py` + a private `utils.py`. None of it was consumed by any model — every model has always run its own bespoke `processing/features/` pipeline instead (see Model Layer below) — no `feast apply` had ever run against the `FeatureView`s it fed, and `daily_feature_create` (the Lambda meant to keep it updated) had dangling imports to modules that never existed (`sp_features`, `bullpen_features`). Deleted along with ~317MB of the S3 data it had produced (`s3://mlbdk/feast/features/*`) — kept `processed_data/season_summaries/*`, since deleting that wasn't part of the ask. Full reasoning: `DECISIONS.md`'s 2026-09-15 entries. Standing principle going forward, stated by the user directly: **only build and maintain what feeds a model or informs a real decision — delete stale code and data aggressively rather than letting it accumulate "just in case."**
 
-- `player_batter_base.py` — per-player rolling stats (7/14/30 day windows) using DuckDB window functions
-- `team_batter_base.py` — same rolling windows aggregated to team level
-- `starting_pitcher_base.py` — SP rolling stats
-- `bullpen_pitcher_base.py` — bullpen rolling stats
+`src/features/transforms/` currently contains:
+- `batter_lineup.py` — `batting_order`, backfill (box score) + incremental (announced lineup) — added 2026-09-15 for `n_pa_predictor`'s frozen feature set, the first file in this directory built for the feature store rather than as a one-off script
+- `batter_pa_volume.py` — batter's own rolling `avg_n_pa_per_game`, same backfill + incremental split — added 2026-09-15, same reason
 - `data_readers.py` — shared S3 readers (`read_batter_boxscore(season)`, etc.) using `awswrangler`
 
-**Pattern:** each transform function takes `year: str`, reads the full season's processed Parquet from S3 via `data_readers.py`, computes rolling windows in DuckDB (registered as in-memory tables), and returns a DataFrame. The handler then slices to a single date snapshot and writes to S3.
+### Naming & organization conventions for `src/features/transforms/`
+
+Scoped out 2026-09-15 from how Chronon (Airbnb) and Michelangelo (Uber) structure this problem at platform-team scale, recalibrated for a solo/small-team repo (their research is cited in `DECISIONS.md`'s 2026-09-15 entries). The principle that transfers regardless of scale is "one definition, thin adapters on both sides" — this repo gets that by hand (a model's `processing/features/` owns the logic, the transforms file only imports and reshapes it) rather than via a declarative DSL that auto-generates batch/streaming compute, because a human writing two small functions is cheaper than building that DSL at this repo's scale. The small-team-specific calibration (also 2026-09-15): don't build a feature store until 2+ models actually share a feature (already how this repo got here — Feast conversion was deferred until model #2 existed), and don't build a registry/catalog beyond this directory listing until the number of files actually makes "what exists" hard to answer by reading it.
+
+- **File naming**: `{entity}_{concept}.py` (e.g. `batter_lineup.py`, `batter_pa_volume.py`). One file per feature, or per tightly-coupled feature family computed by a single query — don't split a family sharing one DuckDB `SELECT` into one-column-per-file just to satisfy a "one feature, one file" rule; that fights the engine rather than helping readability. **No `_base` suffix** — it was inherited from the deleted first-generation files (where it may have loosely meant "foundational per-entity stats") but doesn't currently distinguish anything, since nothing in this directory exists to contrast it against (dropped 2026-09-15, see `DECISIONS.md`). Reintroduce a suffix like this only if a real second category shows up later — e.g. a `_derived`/`_interaction` file combining multiple base features — where the distinction would actually mean something.
+- **Function naming**: `compute_{name}_features(year)` for the backfill entry point (offline store, full season), `compute_{name}_features_for_date(date)` for the incremental entry point (online store, today's snapshot only). Both normalize to the same Feast-ready schema (`personId`/`team_id`, `event_timestamp`, ...).
+- **Placement rule**: a feature lives in a model's `processing/features/` (or `experiments/v{N}_*/`, reading raw/processed S3 directly) while it's still being tried. It only gets a file here after clearing an ablation-style freeze — and even then, this layer imports the canonical logic, it never redefines it (violated once, fixed 2026-09-15 — see the Rule below).
+- **Promotion checklist**, in order: (1) ablation/CI-verified freeze against the model's locked operating point, (2) a backfill vs. incremental **value**-consistency test on real overlapping data, not just column/dtype parity (`test_backfill_and_incremental_produce_identical_schema`-style tests check schema only and are not sufficient on their own — this is the actual train/serve-divergence check per Chronon/Nubank's research), (3) only then written as a file here.
+- **What not to build yet**: no feature registry/manifest file, no code-generation from a declarative spec. Revisit if/when this directory's file count makes a plain listing an inadequate answer to "what features exist."
+
+**Rule — this layer imports feature logic, it never redefines it.** A file in `src/features/transforms/` may only reshape/rename output from a feature computation that already lives in a model's `processing/features/` (or an established cross-model source, e.g. `hit_predictor.processing.pipeline._create_batting_order`) — never reimplement the underlying logic itself. If no reusable implementation exists yet, add it to the owning model's `processing/features/` and import it here, don't write it fresh. This was violated once (`batter_lineup.py`, then still named `batter_lineup_base.py`, reimplemented `_create_batting_order`'s null-filter/dedup instead of calling it, fixed 2026-09-15 — see `DECISIONS.md`) and is exactly the "recreate the transform twice" anti-pattern that causes silent training/serving divergence industry-wide (Chronon, AWS ML Well-Architected).
 
 **Point-in-time safety:** rolling windows close the day *before* the target game date — no same-day leakage.
 
@@ -315,8 +324,6 @@ Integration test approach: moto mocks AWS (S3 + SSM), `unittest.mock.patch` mock
 - **`daily_feature_create` status writer** — not yet integrated; needs the same try/except pattern as the other three Lambdas; `games_processed` keys TBD once the handler bugs are fixed
 - **[fixed 2026-08-26]** `daily_odds_fetch`'s handler used to catch all exceptions and return `{"statusCode": 500, ...}` instead of re-raising, which meant the DLQ and `odds_errors` CloudWatch alarm (both wired to Lambda's native `Errors` metric / unhandled-exception accounting) never fired despite the Lambda failing daily for 9+ days — both alarms sat at `OK` and the DLQ stayed empty the whole time. Handler now re-raises after `write_status`, matching the other three Lambdas' pattern.
 - **[resolved 2026-08-27]** The Odds API free tier (500 credits/month) couldn't sustain this pipeline's real usage — `daily_odds_fetch` bills `markets × regions` per call, and `get_all_player_props`'s 4 markets × ~13-15 games/day (~55-60 credits/day) exhausted the monthly cap by day ~8-9, which is what produced the 2026-08-16 → 08-27 outage above. Fixed by upgrading to The Odds API's 20K plan ($30/mo, 20,000 credits — ~10x current full-usage headroom) and rotating `/mlb/odds-api/api-key` in SSM to the new key. The already-written quota-tracking fix (`set_monthly_usage` reading the real `x-requests-used` header) is now deployed to the live Lambda. **The 2026-08-16 → 08-27 data gap will not be backfilled** — see `ROADMAP.md`'s "Parked / explicitly deferred decisions" for the cost/feasibility finding (real backfill requires the separate historical-odds endpoint at 10x cost, ~7,500 credits one-time).
-- `daily_feature_create` handler has a bug in `_yesterday()` — `timedelta` parenthesis wrapping is incorrect
-- `daily_feature_create` handler references `datetime.timezone.utc` as `datetime.now(datetime.timezone.utc)` — needs `from datetime import timezone`
-- Feature transform modules (`team_batter_base`, `player_batter_base`, etc.) are not bundled in `daily_feature_create` zip — `make zip-feature-create` does not exist yet
-- Tests for `daily_feature_create` handler were deleted (stale); backfilling is deferred
+- **[stale note removed 2026-09-15]** The `_yesterday()` parenthesis bug and the `datetime.timezone.utc` import bug previously listed here are already fixed in the current handler (`from datetime import datetime, timedelta, timezone` + correctly-parenthesized `datetime.now(timezone.utc) - timedelta(days=1)`) — this list just hadn't been updated. `tests/test_daily_feature_create_handler.py` exists and passes (3 tests, mocks `team_batter_base`/`player_batter_base`/`sp_features`/`bullpen_features`/`feast`/`boto3`/`pandas` at the `sys.modules` level, so it never depended on those modules actually existing).
+- `daily_feature_create` handler still imports feature transform modules that no longer exist (`team_batter_base`, `player_batter_base`, `sp_features`, `bullpen_features` — the last two were already-broken dangling references before the 2026-09-15 deletion; see the Lambda Pipeline table above). Needs a full rewrite against the current transforms before this Lambda can run at all — no `make zip-feature-create` target exists yet either.
 - `test_fetch_layer.py` requires `--date YYYY-MM-DD` flag — these are integration tests that hit real S3 data

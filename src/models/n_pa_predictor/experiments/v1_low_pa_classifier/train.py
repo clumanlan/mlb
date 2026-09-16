@@ -95,6 +95,7 @@ from models.hit_predictor.processing.features import rolling_stats
 
 import models.n_pa_predictor.processing.pipeline as pipeline
 from models.n_pa_predictor.processing.features.batter_playing_time import build_batter_pa_rolling_stats
+from models.n_pa_predictor.utils.threshold_eval import wilson_ci, XGB_PARAMS
 
 STAGE = Path(__file__).parent.name
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -110,7 +111,6 @@ STARTER_IP_SHRINKAGE_K = 5.0
 # specifically where an apparent LR-vs-XGBoost "crossover" turned out (see
 # WILSON_Z below) to be sample-size noise, not real — worth resolving finely.
 CONFIDENCE_THRESHOLDS = [0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]
-WILSON_Z = 1.96  # 95% CI
 
 pd.set_option("display.max_columns", None)
 
@@ -345,9 +345,7 @@ lr_prob = lr.predict_proba(Xval_sc)[:, 1]
 
 print("Training XGBoost...")
 import xgboost as xgb
-xgb_model = xgb.XGBClassifier(
-    n_estimators=100, random_state=42, verbosity=0, eval_metric="logloss",
-)
+xgb_model = xgb.XGBClassifier(**XGB_PARAMS)
 xgb_model.fit(Xtr, y_train)
 xgb_prob = xgb_model.predict_proba(Xval)[:, 1]
 
@@ -391,15 +389,6 @@ print("=" * 76)
 # "crossover" around 0.8 that a 95% CI shows is not statistically real (CIs
 # overlap almost completely there) — vs. the 0.6 threshold, where LR's and
 # XGBoost's CIs barely overlap, a real (if modest) difference.
-def wilson_ci(p, n, z=WILSON_Z):
-    if n == 0:
-        return (np.nan, np.nan)
-    denom = 1 + z**2 / n
-    center = p + z**2 / (2 * n)
-    margin = z * np.sqrt(p * (1 - p) / n + z**2 / (4 * n**2))
-    return ((center - margin) / denom, (center + margin) / denom)
-
-
 sweep_rows = []
 for name, p in probs.items():
     for t in CONFIDENCE_THRESHOLDS:

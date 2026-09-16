@@ -1,6 +1,12 @@
-from datetime import timedelta
-from feast import Entity, FeatureView, FileSource
-from feast.data_format import ParquetFormat
+from feast import Entity
+
+# The 4 FeatureViews/FileSources previously defined here (team_batter_base_fv,
+# player_batter_base_fv, starting_pitcher_base_fv, bullpen_pitcher_base_fv)
+# were removed 2026-09-15 — first-generation feature-store attempt, superseded
+# before a single `feast apply` ever ran (see DECISIONS.md's 2026-09-15 entry).
+# These two entities are the reusable part: the n_pa_predictor feature-store
+# work (src/features/transforms/batter_lineup.py,
+# batter_pa_volume.py) already joins on the `player` entity's key.
 
 team = Entity(
     name="team",
@@ -12,60 +18,4 @@ player = Entity(
     name="player",
     join_keys=["personId"],
     description="MLB Player"
-)
-
-team_batter_base_source = FileSource(
-    path="s3://mlbdk/feast/features/team_batter_base/",
-    file_format=ParquetFormat(),
-    timestamp_field="event_timestamp",
-)
-
-player_batter_base_source = FileSource(
-    path="s3://mlbdk/feast/features/player_batter_base/",
-    file_format=ParquetFormat(),
-    timestamp_field="event_timestamp",
-)
-
-starting_pitcher_base_source = FileSource(
-    path="s3://mlbdk/feast/features/starting_pitcher_base/",
-    file_format=ParquetFormat(),
-    timestamp_field="event_timestamp",
-)
-
-bullpen_pitcher_base_source = FileSource(
-    path="s3://mlbdk/feast/features/bullpen_pitcher_base/",
-    file_format=ParquetFormat(),
-    timestamp_field="event_timestamp",
-)
-
-team_batter_base_fv = FeatureView(
-    name="team_batter_base_fv",
-    entities=[team],
-    ttl=timedelta(days=7),
-    source=team_batter_base_source,
-    online=True,
-)
-
-player_batter_base_fv = FeatureView(
-    name="player_batter_base_fv",
-    entities=[player],
-    ttl=timedelta(days=7),
-    source=player_batter_base_source,
-    online=True,
-)
-
-starting_pitcher_base_fv = FeatureView(
-    name="starting_pitcher_base_fv",
-    entities=[player],
-    ttl=timedelta(days=7),
-    source=starting_pitcher_base_source,
-    online=True,
-)
-
-bullpen_pitcher_base_fv = FeatureView(
-    name="bullpen_pitcher_base_fv",
-    entities=[team],
-    ttl=timedelta(days=7),
-    source=bullpen_pitcher_base_source,
-    online=True,
 )
