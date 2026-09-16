@@ -1,8 +1,8 @@
 from models.hit_predictor.processing.pipeline import (
     build_pbp_features,
-    _create_batting_order,
     _add_estimated_team_pa_position,
 )
+from data.modules.preprocessing import create_batting_order
 from models.bb_predictor.processing.schema import WALKS
 
 
@@ -31,7 +31,7 @@ def create_pa_outcome_walk(pbp, batter_boxscore, game_info, schedule):
     team, see expected_role.py) — it isn't the subject of that prop at
     all."""
 
-    batting_order = _create_batting_order(batter_boxscore)
+    batting_order = create_batting_order(batter_boxscore)
     game_info = game_info[["gamepk", "game_season", "weather_condition", "weather_temp"]].drop_duplicates("gamepk")
     schedule = schedule[["gamepk", "game_date", "venue_id"]].drop_duplicates("gamepk")
 

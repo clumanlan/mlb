@@ -1,6 +1,6 @@
 import pandas as pd
 
-from models.hit_predictor.processing.pipeline import _create_batting_order
+from data.modules.preprocessing import create_batting_order
 from models.n_pa_predictor.processing.schema import PA_OUTCOMES
 
 
@@ -43,7 +43,7 @@ def build_batter_game_frame(
     """
 
     label = build_n_pa_label(pbp)
-    batting_order = _create_batting_order(batter_boxscore)
+    batting_order = create_batting_order(batter_boxscore)
 
     frame = label.merge(batting_order, on=['gamepk', 'batter_id'], how='inner')
     frame = frame.merge(

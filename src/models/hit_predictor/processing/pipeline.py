@@ -8,7 +8,8 @@ import pandas as pd
 import numpy as np
 import pandas as pd
 
-from models.hit_predictor.processing.schema import PBP 
+from models.hit_predictor.processing.schema import PBP
+from data.modules.preprocessing import create_batting_order as _create_batting_order
 
 def process_game_info(df):
 
@@ -235,16 +236,11 @@ def _convert_ip_to_decimal(ip: pd.Series) -> pd.Series:
 def process_pitcher_boxscore(df: pd.DataFrame) -> pd.DataFrame:
     return df.assign(ip=lambda x: _convert_ip_to_decimal(x['ip']))
 
-def _create_batting_order(batter_boxscore):
-
-    df = (
-        batter_boxscore[~batter_boxscore['batting_order'].isnull()]
-        [["gamepk", "personId", "batting_order"]]
-        .drop_duplicates(subset=["gamepk", "personId"])
-        .rename(columns={"personId": "batter_id"})
-    )
-
-    return df.assign(batting_order = lambda x: x['batting_order'].astype(int))
+# _create_batting_order moved to data.modules.preprocessing.create_batting_order
+# 2026-09-15 (imported above as _create_batting_order for existing call sites) —
+# see DECISIONS.md's 2026-09-15 entry: generic box-score cleanup with no
+# hit_predictor-specific logic, already depended on by 4+ models plus the
+# feature store by the time of the move.
 
 def _add_estimated_team_pa_position(df):
 

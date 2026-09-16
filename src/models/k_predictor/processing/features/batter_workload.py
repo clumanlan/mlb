@@ -1,4 +1,4 @@
-from models.hit_predictor.processing.pipeline import _create_batting_order
+from data.modules.preprocessing import create_batting_order
 
 
 def build_opposing_lineup_extremum(
@@ -26,7 +26,7 @@ def build_opposing_lineup_extremum(
     shrunk_id_col: the entity-id column name in batter_shrunk_df.
     build_batter_shrunk_k_rate's output is keyed on batter_id (pbp-based);
     build_batter_shrunk_obp_slg's is keyed on personId (box-score based) --
-    _create_batting_order always renames to batter_id, so this lets either
+    create_batting_order always renames to batter_id, so this lets either
     shrunk table join without the caller renaming first.
 
     batter_shrunk_df is a PER-GAME rolling table (one row per batter per
@@ -35,7 +35,7 @@ def build_opposing_lineup_extremum(
     shrunk value, never fanning out against every other game the same
     batter appears in elsewhere in a multi-season dataset.
     """
-    starters = _create_batting_order(batter_boxscore)[['gamepk', 'batter_id']]
+    starters = create_batting_order(batter_boxscore)[['gamepk', 'batter_id']]
     team_lookup = pbp[['batter_id', 'gamepk', 'batter_team_id']].drop_duplicates()
 
     lineup = starters.merge(team_lookup, on=['batter_id', 'gamepk'], how='left')

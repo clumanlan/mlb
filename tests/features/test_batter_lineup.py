@@ -34,8 +34,8 @@ def test_normalize_batter_boxscore_lineup_drops_nulls_and_dedupes():
     batting_order means the player wasn't in that day's starting lineup
     (bench/DNP) and shouldn't produce a lineup-slot feature row at all.
     A duplicate (gamepk, personId) pair (e.g. a raw double-count) must
-    collapse to one row, matching hit_predictor's own
-    _create_batting_order convention."""
+    collapse to one row, matching the shared create_batting_order
+    (data/modules/preprocessing.py) convention."""
     df = pd.DataFrame([
         _boxscore_row(personId="100", gamepk="1", batting_order=3),
         _boxscore_row(personId="100", gamepk="1", batting_order=3),  # duplicate
@@ -53,8 +53,11 @@ def test_normalize_batter_boxscore_lineup_drops_nulls_and_dedupes():
 
 def test_normalize_batter_boxscore_lineup_delegates_to_create_batting_order():
     """Regression test for feature-definition duplication: the null-filter +
-    dedup decision for batting_order must live in exactly one place —
-    hit_predictor's _create_batting_order, which n_pa_predictor's own
+    dedup decision for batting_order must live in exactly one place — the
+    shared create_batting_order (data/modules/preprocessing.py, moved out
+    of hit_predictor 2026-09-15 so this feature-store layer and every
+    consuming model are peers rather than this layer depending on one
+    model's internals — see DECISIONS.md), which n_pa_predictor's own
     training pipeline already calls via processing/pipeline.py::
     build_batter_game_frame. This store-facing normalizer must delegate to
     it rather than reimplementing the same filtering logic a second time,
@@ -64,7 +67,7 @@ def test_normalize_batter_boxscore_lineup_delegates_to_create_batting_order():
     fake_create_result = pd.DataFrame([{"gamepk": "1", "batter_id": "100", "batting_order": 3}])
 
     with patch(
-        "batter_lineup._create_batting_order", return_value=fake_create_result,
+        "batter_lineup.create_batting_order", return_value=fake_create_result,
     ) as mock_create:
         result = _normalize_batter_boxscore_lineup(df)
 
@@ -77,8 +80,8 @@ def test_normalize_batter_boxscore_lineup_delegates_to_create_batting_order():
 
 def test_normalize_batter_boxscore_lineup_keeps_personid_not_batter_id():
     """The Feast `player` entity's join key is personId — this pipeline
-    must NOT rename it to batter_id the way hit_predictor's own
-    _create_batting_order does for its own unrelated purposes."""
+    must NOT rename it to batter_id the way the shared create_batting_order
+    does for its own unrelated purposes."""
     df = pd.DataFrame([_boxscore_row(personId="100", gamepk="1", batting_order=5)])
 
     result = _normalize_batter_boxscore_lineup(df)

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from .season_stats import _prefix_stat_cols, _pitcher_role_lookup
-from models.hit_predictor.processing.pipeline import _create_batting_order
+from data.modules.preprocessing import create_batting_order
 
 # Stat definitions, formulas, and "why this stat" rationale: see FEATURE_GLOSSARY.md
 # and season_stats.py's header comment — same stat categories/formulas as season_stats.py,
@@ -890,7 +890,7 @@ def build_team_batter_strikeout_rolling_feats(
 ) -> pd.DataFrame:
     _validate_window(window)
 
-    starters = _create_batting_order(batter_boxscore)[['gamepk', 'batter_id']]
+    starters = create_batting_order(batter_boxscore)[['gamepk', 'batter_id']]
     per_batter_game = _batter_pa_outcome_per_game(pbp)[PBP_BATTER_KEY_COLS + ['pa_total', 'pa_strikeout_n']]
     team_lookup = pbp[['batter_id', 'gamepk', 'batter_team_id']].drop_duplicates()
 
@@ -937,7 +937,7 @@ def build_team_strikeout_volatility(
     """
     _validate_window(window)
 
-    starters = _create_batting_order(batter_boxscore)[['gamepk', 'batter_id']]
+    starters = create_batting_order(batter_boxscore)[['gamepk', 'batter_id']]
     per_batter_game = _batter_pa_outcome_per_game(pbp)[PBP_BATTER_KEY_COLS + ['pa_total', 'pa_strikeout_n']]
     team_lookup = pbp[['batter_id', 'gamepk', 'batter_team_id']].drop_duplicates()
 
@@ -1095,7 +1095,7 @@ def build_team_batter_onbase_rolling_feats(
     outs recorded, independent of strikeout rate."""
     _validate_window(window)
 
-    starters = _create_batting_order(batter_boxscore)[['gamepk', 'batter_id']]
+    starters = create_batting_order(batter_boxscore)[['gamepk', 'batter_id']]
     per_batter_game = _batter_pa_outcome_per_game(pbp)[
         PBP_BATTER_KEY_COLS + ['pa_total', 'pa_walk_n', 'pa_hit_n', 'pa_hbp_n']
     ]

@@ -399,6 +399,29 @@ def process_pitcher_boxscore(df):
     return enforce_schema(df, schema=PITCHER_BOXSCORE_SCHEMA, context='process_pitcher_boxscore')
 
 
+def create_batting_order(batter_boxscore: pd.DataFrame) -> pd.DataFrame:
+    """One row per (gamepk, batter_id) with a real (non-null) starting
+    batting_order slot. Moved here 2026-09-15 from hit_predictor's
+    processing/pipeline.py (as a private _create_batting_order) — generic
+    box-score cleanup with no hit_predictor-specific business logic, already
+    depended on by hit_predictor, n_pa_predictor, k_predictor, bb_predictor,
+    and the batter_lineup feature-store transform by the time of the move.
+    Lives here, not inside any one model's directory, so all of those stay
+    peer consumers of one definition rather than some depending on another
+    model's internals. hit_predictor's processing/pipeline.py re-exports
+    this as _create_batting_order for existing call sites; new code should
+    import create_batting_order from here directly.
+    """
+    df = (
+        batter_boxscore[~batter_boxscore['batting_order'].isnull()]
+        [["gamepk", "personId", "batting_order"]]
+        .drop_duplicates(subset=["gamepk", "personId"])
+        .rename(columns={"personId": "batter_id"})
+    )
+
+    return df.assign(batting_order=lambda x: x['batting_order'].astype(int))
+
+
 def process_batter_boxscore(df):
     """
     Normalize batter boxscore: filter out header rows, coerce types, add derived stats and team_id.

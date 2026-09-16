@@ -4,7 +4,7 @@ import boto3
 import pandas as pd
 
 from data_readers import read_batter_boxscore
-from models.hit_predictor.processing.pipeline import _create_batting_order
+from data.modules.preprocessing import create_batting_order
 
 BUCKET = "mlbdk"
 
@@ -17,14 +17,17 @@ OUTPUT_COLUMNS = ["personId", "gamepk", "event_timestamp", "batting_order"]
 
 
 def _normalize_batter_boxscore_lineup(df: pd.DataFrame) -> pd.DataFrame:
-    # Delegates the null-filter + dedup decision to hit_predictor's
-    # _create_batting_order — the same function n_pa_predictor's own
-    # training pipeline calls (processing/pipeline.py::build_batter_game_frame)
-    # — rather than reimplementing it here. That function renames personId to
-    # batter_id and drops game_date for its own (unrelated) purposes, so this
-    # wrapper renames back and re-attaches event_timestamp from a
-    # gamepk-only lookup, but never re-decides which rows count.
-    batting_order = _create_batting_order(df).rename(columns={"batter_id": "personId"})
+    # Delegates the null-filter + dedup decision to the shared
+    # create_batting_order (data/modules/preprocessing.py) — the same
+    # function n_pa_predictor's own training pipeline calls
+    # (processing/pipeline.py::build_batter_game_frame), moved out of
+    # hit_predictor 2026-09-15 so this feature-store layer isn't depending
+    # on one specific model's internals (see DECISIONS.md) — rather than
+    # reimplementing it here. That function renames personId to batter_id
+    # and drops game_date for its own (unrelated) purposes, so this wrapper
+    # renames back and re-attaches event_timestamp from a gamepk-only
+    # lookup, but never re-decides which rows count.
+    batting_order = create_batting_order(df).rename(columns={"batter_id": "personId"})
     game_dates = (
         df[["gamepk", "game_date"]]
         .drop_duplicates("gamepk")

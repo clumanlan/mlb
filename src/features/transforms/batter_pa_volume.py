@@ -10,10 +10,11 @@ from models.n_pa_predictor.processing.features.batter_playing_time import build_
 # Wraps the already-tested build_batter_game_frame + build_batter_pa_rolling_stats
 # rather than reimplementing the point-in-time-safe rolling logic — same
 # delegate-don't-redefine rule batter_lineup.py follows via
-# _create_batting_order. Neither wrapped function is modified here; this
-# module only normalizes their output into the store's schema (personId,
-# event_timestamp — not batter_id, game_date) and names the columns per this
-# repo's established {entity}_roll_{window}_{stat} convention.
+# create_batting_order (data/modules/preprocessing.py). Neither wrapped
+# function is modified here; this module only normalizes their output into
+# the store's schema (personId, event_timestamp — not batter_id, game_date)
+# and names the columns per this repo's established
+# {entity}_roll_{window}_{stat} convention.
 OUTPUT_COLUMNS = [
     "personId", "gamepk", "event_timestamp",
     "batter_pa_roll_season_games_n", "batter_pa_roll_season_avg_n_pa_per_game",
