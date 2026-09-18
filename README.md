@@ -21,7 +21,7 @@ Pipeline layers, in order:
 - Layer 1 — Raw Ingestion (MLB Stats API to S3) — **done**
 - Layer 2 — Validation (quality gate before downstream runs) — **done**
 - Layer 3 — Feature Engineering (rolling-window features to S3) — **in progress**
-- Layer 4 — Feature Store (Feast, offline S3/Athena, online DynamoDB) — **not started**
+- Layer 4 — Feature Store (Feast, offline S3, online DynamoDB) — **in progress**: 2 features (`n_pa_predictor`'s `batting_order`, `avg_n_pa_per_game`) run live, event-triggered off real lineup confirmations, proven end-to-end into DynamoDB
 - Layer 5 — Model Training (XGBoost baseline to attention model) — **in progress**
 - Layer 6 — Prediction Pipeline (daily batch inference, lineup-aware) — **not started**
 - Layer 7 — MLOps (MLflow, Evidently AI, CloudWatch) — **not started**
