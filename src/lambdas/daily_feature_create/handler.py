@@ -1,139 +1,120 @@
 import io
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import boto3
 import pandas as pd
-from feast import FeatureStore
- 
-from team_batter_base import compute_team_batter_base_features
-from player_batter_base import compute_player_batter_base_features
-from sp_features import compute_sp_rolling_features
-from bullpen_features import compute_bullpen_features
- 
+
+from batter_lineup import compute_batter_lineup_features_for_date
+from batter_pa_volume import compute_batter_pa_volume_features_for_date
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
- 
+
 BUCKET      = "mlbdk"
 REGION      = "us-east-2"
-FEAST_PATH  = "/opt/features/"
- 
+MATERIALIZE_FUNCTION_NAME = "daily_feature_materialize"
+
 s3 = boto3.client("s3", region_name=REGION)
- 
+lambda_client = boto3.client("lambda", region_name=REGION)
 
 
 # ----------------------- HELPERS -----------------------------------
 
-def _yesterday():
-    return (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
+def _today():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
-def _write_snapshot(df: pd.DataFrame, key:str) -> None:
+
+def _date_from_event(event):
+    """Direct-invoke shape ({"date": "..."}, used for manual smoke tests —
+    see CLAUDE.md) is unchanged. S3-event shape (this Lambda's real trigger,
+    fired by daily_lineup_fetch's per-game lineup writes) carries the date
+    in the object key: raw_data/games/lineups/{year}/{date}/{game_pk}.json.
+    Returns (date, is_states_file) — daily_lineup_fetch also writes a
+    states-tracking file to the same prefix on every poll cycle regardless
+    of whether anything new confirmed; S3's prefix/suffix-only filters
+    can't exclude it, so this must be detected and skipped here instead."""
+    records = event.get("Records")
+    if not records:
+        return event.get("date") or _today(), False
+
+    key = records[0]["s3"]["object"]["key"]
+    parts = key.split("/")
+    # raw_data/games/lineups/{year}/{date}/{game_pk}.json
+    # raw_data/games/lineups/states/{year}/{date}.json
+    if parts[3] == "states":
+        return None, True
+    return parts[4], False
+
+def _write_snapshot(df: pd.DataFrame, key: str) -> None:
     buffer = io.BytesIO()
     df.to_parquet(buffer, index=False)
     buffer.seek(0)
     s3.put_object(Bucket=BUCKET, Key=key, Body=buffer.getvalue())
     logger.info(f"Wrote {len(df)} rows to s3://{BUCKET}/{key}")
- 
-def _get_snapshot(df: pd.DataFrame, date: str) -> pd.DataFrame:
-    snapshot = df[df["game_date"] == date].copy()
-    snapshot["event_timestamp"] = pd.to_datetime(snapshot["game_date"])
-    return snapshot
 
 # ----------------------- INDIVIDUAL TRANSFORMS -----------------------------------
 
-def _run_team_batter_base(year:str, date:str) -> str:
-    features = compute_team_batter_base_features(year)
-    snapshot = _get_snapshot(features, date)
-    if snapshot.empty:
-        logger.warning(f"[team_batter_base] no rows for {date}")
-    _write_snapshot(snapshot, key=f"feast/features/team_batter_base/{year}/{date}.parquet")
-
-    return "ok"
-
-
-def _run_player_batter_base(year: str, date: str) -> str:
-    features = compute_player_batter_base_features(year)
-    snapshot = _get_snapshot(features, date)
-    if snapshot.empty:
-        logger.warning(f"[player_batter_base] no rows for {date}")
+def _run_batter_lineup(date: str) -> str:
+    year = date[:4]
+    features = compute_batter_lineup_features_for_date(date)
+    if features.empty:
+        logger.warning(f"[batter_lineup] no rows for {date}")
         return "empty"
-    _write_snapshot(snapshot, f"feast/features/player_batter_base/{year}/{date}.parquet")
+    _write_snapshot(features, key=f"feast/features/batter_lineup/{year}/{date}.parquet")
     return "ok"
- 
- 
-def _run_sp_base(year: str, date: str) -> str:
-    features = compute_sp_rolling_features(year)
-    snapshot = _get_snapshot(features, date)
-    if snapshot.empty:
-        logger.warning(f"[sp_base] no rows for {date}")
+
+
+def _run_batter_pa_volume(date: str) -> str:
+    year = date[:4]
+    features = compute_batter_pa_volume_features_for_date(date)
+    if features.empty:
+        logger.warning(f"[batter_pa_volume] no rows for {date}")
         return "empty"
-    _write_snapshot(snapshot, f"feast/features/starting_pitcher_base/{year}/{date}.parquet")
+    _write_snapshot(features, key=f"feast/features/batter_pa_volume/{year}/{date}.parquet")
     return "ok"
- 
- 
-def _run_bullpen_base(year: str, date: str) -> str:
-    features = compute_bullpen_features(year)
-    snapshot = _get_snapshot(features, date)
-    if snapshot.empty:
-        logger.warning(f"[bullpen_base] no rows for {date}")
-        return "empty"
-    _write_snapshot(snapshot, f"feast/features/bullpen_pitcher_base/{year}/{date}.parquet")
-    return "ok"
- 
- # ----------------------- HANDLER  -----------------------------------
+
+# ----------------------- HANDLER  -----------------------------------
 
 def lambda_handler(event, context):
-    date = event.get("date") or _yesterday() # will default to yesterday if date not passed
-    year = date[:4]
+    date, is_states_file = _date_from_event(event)
+    if is_states_file:
+        logger.info("Skipping states-tracking file event, not a lineup confirmation")
+        return {"statusCode": 200, "body": json.dumps({"skipped": "states file, not a lineup"})}
+
     logger.info(f"Feature pipeline starting for {date}")
 
     transforms = {
-        "team_batter_base": _run_team_batter_base,
-        "player_batter_base": _run_player_batter_base,
-        "sp_base": _run_sp_base,
-        "bullpen_base": _run_bullpen_base
+        "batter_lineup": _run_batter_lineup,
+        "batter_pa_volume": _run_batter_pa_volume,
     }
 
     results = {}
-
     for name, fn in transforms.items():
         try:
-            results[name] = fn(year,date) 
+            results[name] = fn(date)
             logger.info(f"[{name}] {results[name]} written to S3")
         except Exception as e:
             logger.error(f"[{name}] FAILED: {type(e).__name__}: {e}")
             results[name] = f"error: {e}"
 
-
-    # only materialize features that worked
     succeeded = [k for k, v in results.items() if v == 'ok']
     failed = [k for k, v in results.items() if v.startswith('error')]
 
     if succeeded:
         try:
-            store = FeatureStore(repo_path=FEAST_PATH)
-            store.materialize_incremental(end_date=datetime.now(timezone.utc))
-            results['materialize'] = 'ok'
-            logger.info("materialization complete")
-
+            lambda_client.invoke(FunctionName=MATERIALIZE_FUNCTION_NAME, InvocationType='Event')
+            logger.info(f"Invoked {MATERIALIZE_FUNCTION_NAME}")
         except Exception as e:
-            logger.error(f"Materialization failed: {e}")
-            results['materialize'] = f"error: {e}"
-
-    else:
-        logger.info("All transforms failed -- skipping materialization")
-
-        results['materialize'] = "skipped"
+            logger.error(f"Failed to invoke {MATERIALIZE_FUNCTION_NAME}: {type(e).__name__}: {e}")
 
     logger.info(f"Pipeline results: {json.dumps(results)}")
-    
-
     return {
         "statusCode": 200 if not failed else 207,
         "body": json.dumps({
-            "date":date,
-            "succeeded":succeeded,
-            "failed":failed,
+            "date": date,
+            "succeeded": succeeded,
+            "failed": failed,
             "results": results,
-        }) 
+        })
     }

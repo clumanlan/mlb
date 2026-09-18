@@ -44,7 +44,7 @@ def test_normalize_batter_boxscore_lineup_drops_nulls_and_dedupes():
 
     result = _normalize_batter_boxscore_lineup(df)
 
-    assert set(result.columns) == {"personId", "gamepk", "event_timestamp", "batting_order"}
+    assert set(result.columns) == {"personId", "gamepk", "event_timestamp", "game_date", "batting_order"}
     assert len(result) == 1
     assert result.iloc[0]["personId"] == "100"
     assert result["batting_order"].isna().sum() == 0
@@ -132,12 +132,27 @@ def test_parse_lineup_payload_flattens_and_renames():
 
     result = parse_lineup_payload(payload)
 
-    assert set(result.columns) == {"personId", "gamepk", "event_timestamp", "batting_order"}
+    assert set(result.columns) == {"personId", "gamepk", "event_timestamp", "game_date", "batting_order"}
     assert len(result) == 2
     assert set(result["personId"]) == {"100", "200"}
     assert (result["gamepk"] == "999").all()
-    assert (result["event_timestamp"] == "2024-04-01").all()
+    assert (result["game_date"] == "2024-04-01").all()
     assert result["batting_order"].dtype == "int64"
+
+
+def test_parse_lineup_payload_uses_confirmed_at_as_event_timestamp():
+    """The Feast-facing event_timestamp must reflect the real moment the
+    lineup was confirmed (daily_lineup_fetch's own confirmed_at field), not
+    the calendar date — otherwise materialize_incremental()'s watermark
+    silently skips later-confirmed games if materialize runs more than once
+    per day (see DECISIONS.md's 2026-09-17 entry). game_date carries the
+    calendar date separately, for batter_pa_volume's rolling-window logic."""
+    payload = _lineup_payload(date="2024-04-01", confirmed_at="2024-04-01T22:00:00Z")
+
+    result = parse_lineup_payload(payload)
+
+    assert (result["event_timestamp"] == pd.Timestamp("2024-04-01T22:00:00")).all()
+    assert (result["game_date"] == pd.Timestamp("2024-04-01")).all()
 
 
 @pytest.fixture()
@@ -206,4 +221,8 @@ def test_backfill_and_incremental_agree_on_batting_order_value():
 
     assert backfill_row["batting_order"] == incremental_row["batting_order"]
     assert backfill_row["gamepk"] == incremental_row["gamepk"]
-    assert backfill_row["event_timestamp"] == incremental_row["event_timestamp"]
+    # game_date (calendar date) must agree between the two independent
+    # sources — event_timestamp deliberately no longer does: backfill has
+    # no real "confirmation moment" concept, so it stays game_date-based,
+    # while incremental's event_timestamp is the real confirmed_at time.
+    assert backfill_row["game_date"] == incremental_row["game_date"]

@@ -122,6 +122,48 @@ deploy-lineup-fetch: zip-lineup-fetch
 	  --zip-file fileb://$(BUILD_DIR)/daily_lineup_fetch.zip > /dev/null
 	@echo "✓ daily_lineup_fetch deployed"
 
+# daily_feature_create bundles a nested-package closure (models.*, data.modules),
+# not a flat sibling-module list like the other Lambdas — see
+# src/lambdas/daily_feature_create/implementation_plan.md. No deploy target:
+# this Lambda's IaC ownership is an unresolved, separate decision.
+zip-feature-create:
+	rm -rf $(BUILD_DIR)/feature_create
+	mkdir -p $(BUILD_DIR)/feature_create
+	cp src/lambdas/daily_feature_create/handler.py $(BUILD_DIR)/feature_create/
+	cp src/features/transforms/batter_lineup.py $(BUILD_DIR)/feature_create/
+	cp src/features/transforms/batter_pa_volume.py $(BUILD_DIR)/feature_create/
+	cp src/features/transforms/data_readers.py $(BUILD_DIR)/feature_create/
+	cp src/features/feature_store.yaml $(BUILD_DIR)/feature_create/
+	mkdir -p $(BUILD_DIR)/feature_create/data/modules
+	cp src/data/__init__.py $(BUILD_DIR)/feature_create/data/
+	cp src/data/modules/__init__.py src/data/modules/preprocessing.py $(BUILD_DIR)/feature_create/data/modules/
+	mkdir -p $(BUILD_DIR)/feature_create/models/hit_predictor/processing/features
+	mkdir -p $(BUILD_DIR)/feature_create/models/n_pa_predictor/processing/features
+	cp src/models/hit_predictor/processing/__init__.py src/models/hit_predictor/processing/schema.py $(BUILD_DIR)/feature_create/models/hit_predictor/processing/
+	cp src/models/hit_predictor/processing/features/rolling_stats.py \
+	   src/models/hit_predictor/processing/features/season_stats.py \
+	   src/models/hit_predictor/processing/features/interaction_feats.py \
+	   src/models/hit_predictor/processing/features/tier1_feats.py \
+	   $(BUILD_DIR)/feature_create/models/hit_predictor/processing/features/
+	cp src/models/n_pa_predictor/processing/__init__.py src/models/n_pa_predictor/processing/pipeline.py src/models/n_pa_predictor/processing/schema.py $(BUILD_DIR)/feature_create/models/n_pa_predictor/processing/
+	cp src/models/n_pa_predictor/processing/features/batter_playing_time.py $(BUILD_DIR)/feature_create/models/n_pa_predictor/processing/features/
+	cd $(BUILD_DIR)/feature_create && zip -r ../daily_feature_create.zip . -x "*.pyc" -x "__pycache__/*"
+	rm -rf $(BUILD_DIR)/feature_create
+
+# daily_feature_materialize is a container-image Lambda, not zip+layers — feast's
+# real dependency closure (~470MB full install) doesn't fit Lambda's 250MB
+# zip+layers cap. Builds the image locally only; no push (that's a separate,
+# explicitly-confirmed step against a real ECR repo).
+build-feature-materialize-image:
+	rm -rf $(BUILD_DIR)/feature_materialize
+	mkdir -p $(BUILD_DIR)/feature_materialize
+	cp src/lambdas/daily_feature_materialize/handler.py $(BUILD_DIR)/feature_materialize/
+	cp src/lambdas/daily_feature_materialize/requirements.txt $(BUILD_DIR)/feature_materialize/
+	cp src/lambdas/daily_feature_materialize/Dockerfile $(BUILD_DIR)/feature_materialize/
+	cp src/features/feature_store.yaml $(BUILD_DIR)/feature_materialize/
+	cd $(BUILD_DIR)/feature_materialize && docker build -t daily_feature_materialize:local .
+	rm -rf $(BUILD_DIR)/feature_materialize
+
 deploy-all:
 	$(MAKE) clean
 	$(MAKE) deploy-mlb-fetch

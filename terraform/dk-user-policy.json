@@ -4,7 +4,7 @@
     {
       "Sid": "S3MainBucketLevel",
       "Effect": "Allow",
-      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetBucketNotification", "s3:PutBucketNotification"],
       "Resource": "arn:aws:s3:::mlbdk"
     },
     {
@@ -126,9 +126,12 @@
         "ecr:DescribeImages",
         "ecr:DescribeRepositories",
         "ecr:GetDownloadUrlForLayer",
+        "ecr:GetRepositoryPolicy",
         "ecr:InitiateLayerUpload",
         "ecr:ListImages",
+        "ecr:ListTagsForResource",
         "ecr:PutImage",
+        "ecr:SetRepositoryPolicy",
         "ecr:UploadLayerPart"
       ],
       "Resource": "arn:aws:ecr:*:685464669237:repository/*"

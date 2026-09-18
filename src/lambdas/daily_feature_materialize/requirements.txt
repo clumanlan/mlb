@@ -1,0 +1,10 @@
+numpy==2.3.1
+pandas==2.3.3
+pyarrow==25.0.1
+feast[aws]==0.62.0
+# feast[aws]==0.62.0 caps fsspec<=2024.9.0 (unlike the root requirements.txt,
+# which doesn't need to satisfy that cap since awswrangler pulls its own
+# fsspec range) — pinning s3fs==2026.7.0 here like the root file does would
+# force an unresolvable fsspec conflict. Left unpinned so pip picks an s3fs
+# version compatible with feast's actual ceiling.
+s3fs

@@ -10,6 +10,24 @@ from batter_pa_volume import (
 )
 
 
+def test_compute_batter_pa_volume_features_reads_only_needed_playbyplay_columns():
+    """Real production incident (2026-09-18): reading the full prepared
+    playbyplay table (70 columns, mostly wide Statcast floats) for a whole
+    season OOM'd this Lambda twice in a row (512MB then 2048MB, maxed out
+    both times) before build_n_pa_label ever used more than these 4
+    columns. See tests/features/test_data_readers.py for the underlying fix."""
+    pbp = pd.DataFrame([_pbp_row(gamepk="1", play_id="g1p1", play_result="Single")])
+    batter_boxscore = pd.DataFrame([{"gamepk": "1", "personId": "1", "batting_order": 3}])
+    schedule = pd.DataFrame([{"gamepk": "1", "game_date": pd.Timestamp("2024-04-01")}])
+
+    with patch("batter_pa_volume.read_playbyplay", return_value=pbp) as mock_read, \
+         patch("batter_pa_volume.read_batter_boxscore", return_value=batter_boxscore), \
+         patch("batter_pa_volume.read_schedule", return_value=schedule):
+        compute_batter_pa_volume_features("2024")
+
+    mock_read.assert_called_once_with("2024", columns=["gamepk", "play_id", "batter_id", "play_result"])
+
+
 def test_normalize_batter_pa_rolling_renames_to_store_schema():
     """Output of build_batter_pa_rolling_stats (batter_id, gamepk, game_date,
     game_season, batter_n_pa_roll_season_games_n,
@@ -82,9 +100,12 @@ def test_compute_batter_pa_volume_features_rolls_prior_games_only():
 
 def test_append_phantom_rows_adds_one_unknown_row_per_todays_player():
     """today_players is literally compute_batter_lineup_features_for_date's own output
-    shape (personId, gamepk, event_timestamp) — reused directly, not a new
-    lookup. A brand-new batter with zero history must still get a phantom
-    row (min_periods=1 handles the no-prior-games case downstream)."""
+    shape (personId, gamepk, event_timestamp, game_date) — reused directly,
+    not a new lookup. A brand-new batter with zero history must still get a
+    phantom row (min_periods=1 handles the no-prior-games case downstream).
+    Phantom rows must key off game_date (calendar date), not event_timestamp
+    (the real confirmation moment, which can differ — see
+    test_append_phantom_rows_uses_game_date_not_event_timestamp below)."""
     batter_game = pd.DataFrame([
         {"batter_id": "1", "gamepk": "1", "game_date": pd.Timestamp("2024-04-01"),
          "game_season": 2024, "n_pa": 4},
@@ -92,9 +113,12 @@ def test_append_phantom_rows_adds_one_unknown_row_per_todays_player():
          "game_season": 2024, "n_pa": 3},
     ])
     today_players = pd.DataFrame([
-        {"personId": "1", "gamepk": "9", "event_timestamp": pd.Timestamp("2024-04-10"), "batting_order": 3},
-        {"personId": "2", "gamepk": "9", "event_timestamp": pd.Timestamp("2024-04-10"), "batting_order": 4},
-        {"personId": "3", "gamepk": "10", "event_timestamp": pd.Timestamp("2024-04-10"), "batting_order": 1},
+        {"personId": "1", "gamepk": "9", "event_timestamp": pd.Timestamp("2024-04-10"),
+         "game_date": pd.Timestamp("2024-04-10"), "batting_order": 3},
+        {"personId": "2", "gamepk": "9", "event_timestamp": pd.Timestamp("2024-04-10"),
+         "game_date": pd.Timestamp("2024-04-10"), "batting_order": 4},
+        {"personId": "3", "gamepk": "10", "event_timestamp": pd.Timestamp("2024-04-10"),
+         "game_date": pd.Timestamp("2024-04-10"), "batting_order": 1},
     ])
 
     result = _append_phantom_rows(batter_game, today_players)
@@ -109,12 +133,34 @@ def test_append_phantom_rows_adds_one_unknown_row_per_todays_player():
     assert (result[result["gamepk"] == "1"]["n_pa"].dropna() == [4, 3]).all()
 
 
+def test_append_phantom_rows_uses_game_date_not_event_timestamp():
+    """Real confirmation moments (event_timestamp) land at all different
+    times of day — the rolling-window logic must key phantom rows off the
+    calendar date (game_date) regardless, or a lineup confirmed at, say,
+    10pm would produce a phantom row for the wrong day."""
+    batter_game = pd.DataFrame([
+        {"batter_id": "1", "gamepk": "1", "game_date": pd.Timestamp("2024-04-01"),
+         "game_season": 2024, "n_pa": 4},
+    ])
+    today_players = pd.DataFrame([
+        {"personId": "1", "gamepk": "9", "event_timestamp": pd.Timestamp("2024-04-10T22:15:00"),
+         "game_date": pd.Timestamp("2024-04-10"), "batting_order": 3},
+    ])
+
+    result = _append_phantom_rows(batter_game, today_players)
+
+    phantom = result[result["gamepk"] == "9"].iloc[0]
+    assert phantom["game_date"] == pd.Timestamp("2024-04-10")
+    assert phantom["game_season"] == 2024
+
+
 def test_compute_batter_pa_volume_features_for_date_uses_lineup_to_know_who_plays():
     """Incremental mode end-to-end: today's players come from
     compute_batter_lineup_features_for_date, history from the same raw readers as
     backfill. The batter's snapshot must reflect only prior games."""
     today_players = pd.DataFrame([
-        {"personId": "1", "gamepk": "9", "event_timestamp": pd.Timestamp("2024-04-10"), "batting_order": 3},
+        {"personId": "1", "gamepk": "9", "event_timestamp": pd.Timestamp("2024-04-10"),
+         "game_date": pd.Timestamp("2024-04-10"), "batting_order": 3},
     ])
     pbp = pd.DataFrame([
         _pbp_row(gamepk="1", play_id="g1p1", play_result="Single"),
@@ -140,11 +186,35 @@ def test_compute_batter_pa_volume_features_for_date_uses_lineup_to_know_who_play
     assert row["batter_pa_roll_season_avg_n_pa_per_game"] == 4.0
 
 
+def test_compute_batter_pa_volume_features_for_date_uses_real_confirmed_at_not_midnight():
+    """Direct regression test for the event_timestamp bug: the incremental
+    path's final output must report the real confirmation moment
+    (today_players' event_timestamp), not game_date/midnight — or
+    materialize_incremental()'s watermark silently skips later-confirmed
+    games on a second same-day run (see DECISIONS.md's 2026-09-17 entry)."""
+    today_players = pd.DataFrame([
+        {"personId": "1", "gamepk": "9", "event_timestamp": pd.Timestamp("2024-04-10T22:15:00"),
+         "game_date": pd.Timestamp("2024-04-10"), "batting_order": 3},
+    ])
+    pbp = pd.DataFrame([_pbp_row(gamepk="1", play_id="g1p1", play_result="Single")])
+    batter_boxscore = pd.DataFrame([{"gamepk": "1", "personId": "1", "batting_order": 3}])
+    schedule = pd.DataFrame([{"gamepk": "1", "game_date": pd.Timestamp("2024-04-01")}])
+
+    with patch("batter_pa_volume.compute_batter_lineup_features_for_date", return_value=today_players), \
+         patch("batter_pa_volume.read_playbyplay", return_value=pbp), \
+         patch("batter_pa_volume.read_batter_boxscore", return_value=batter_boxscore), \
+         patch("batter_pa_volume.read_schedule", return_value=schedule):
+        result = compute_batter_pa_volume_features_for_date("2024-04-10")
+
+    assert result.iloc[0]["event_timestamp"] == pd.Timestamp("2024-04-10T22:15:00")
+
+
 def test_backfill_and_incremental_produce_identical_schema():
     """Same reason this test exists on batter_lineup: both entry
     points must agree on exactly what this feature group looks like."""
     today_players = pd.DataFrame([
-        {"personId": "1", "gamepk": "9", "event_timestamp": pd.Timestamp("2024-04-10"), "batting_order": 3},
+        {"personId": "1", "gamepk": "9", "event_timestamp": pd.Timestamp("2024-04-10"),
+         "game_date": pd.Timestamp("2024-04-10"), "batting_order": 3},
     ])
     pbp = pd.DataFrame([_pbp_row(gamepk="1", play_id="g1p1", play_result="Single")])
     batter_boxscore = pd.DataFrame([{"gamepk": "1", "personId": "1", "batting_order": 3}])
@@ -208,7 +278,8 @@ def test_backfill_and_incremental_agree_on_rolling_value_for_same_history():
     history_boxscore = batter_boxscore[batter_boxscore["gamepk"].isin(["1", "2"])]
     history_schedule = schedule[schedule["gamepk"].isin(["1", "2"])]
     today_players = pd.DataFrame([
-        {"personId": "1", "gamepk": "3", "event_timestamp": pd.Timestamp("2024-04-03"), "batting_order": 3},
+        {"personId": "1", "gamepk": "3", "event_timestamp": pd.Timestamp("2024-04-03"),
+         "game_date": pd.Timestamp("2024-04-03"), "batting_order": 3},
     ])
 
     with patch("batter_pa_volume.compute_batter_lineup_features_for_date", return_value=today_players), \

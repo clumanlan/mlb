@@ -20,6 +20,12 @@ OUTPUT_COLUMNS = [
     "batter_pa_roll_season_games_n", "batter_pa_roll_season_avg_n_pa_per_game",
 ]
 
+# build_batter_game_frame's build_n_pa_label only ever reads these 4 columns
+# out of the prepared playbyplay table's 70 (mostly wide Statcast float
+# columns) — reading the full table for a season inside a Lambda OOM'd
+# twice in a row (2026-09-18, 512MB then 2048MB, maxed out both times).
+PBP_COLUMNS_NEEDED = ["gamepk", "play_id", "batter_id", "play_result"]
+
 
 def _normalize_batter_pa_rolling(df: pd.DataFrame) -> pd.DataFrame:
     out = df.rename(columns={
@@ -33,7 +39,7 @@ def _normalize_batter_pa_rolling(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_batter_pa_volume_features(year: str) -> pd.DataFrame:
-    pbp = read_playbyplay(year)
+    pbp = read_playbyplay(year, columns=PBP_COLUMNS_NEEDED)
     batter_boxscore = read_batter_boxscore(year)
     schedule = read_schedule(year)
 
@@ -58,8 +64,8 @@ def _append_phantom_rows(batter_game: pd.DataFrame, today_players: pd.DataFrame)
     phantoms = pd.DataFrame({
         "batter_id": today_players["personId"],
         "gamepk": today_players["gamepk"],
-        "game_date": today_players["event_timestamp"],
-        "game_season": today_players["event_timestamp"].dt.year,
+        "game_date": today_players["game_date"],
+        "game_season": today_players["game_date"].dt.year,
         "n_pa": np.nan,
     })
     return pd.concat([batter_game, phantoms], ignore_index=True)
@@ -71,7 +77,7 @@ def compute_batter_pa_volume_features_for_date(date: str) -> pd.DataFrame:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
     year = date[:4]
-    pbp = read_playbyplay(year)
+    pbp = read_playbyplay(year, columns=PBP_COLUMNS_NEEDED)
     batter_boxscore = read_batter_boxscore(year)
     schedule = read_schedule(year)
 
@@ -83,4 +89,14 @@ def compute_batter_pa_volume_features_for_date(date: str) -> pd.DataFrame:
 
     today_ts = pd.Timestamp(date)
     todays_rows = rolled[rolled["game_date"] == today_ts]
-    return _normalize_batter_pa_rolling(todays_rows)
+    out = _normalize_batter_pa_rolling(todays_rows)
+
+    # Fold in the real confirmation moment from today_players — _normalize's
+    # game_date->event_timestamp rename is correct for backfill (no real
+    # "confirmed_at" concept) but wrong here: materialize_incremental()'s
+    # watermark reads event_timestamp, so incremental output must carry the
+    # real confirmation time, not midnight (see OUTPUT_COLUMNS comment in
+    # batter_lineup.py and DECISIONS.md's 2026-09-17 entry).
+    confirmed_at = today_players[["personId", "gamepk", "event_timestamp"]]
+    out = out.drop(columns=["event_timestamp"]).merge(confirmed_at, on=["personId", "gamepk"], how="left")
+    return out[OUTPUT_COLUMNS]
