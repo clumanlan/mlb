@@ -164,6 +164,29 @@ build-feature-materialize-image:
 	cd $(BUILD_DIR)/feature_materialize && docker build -t daily_feature_materialize:local .
 	rm -rf $(BUILD_DIR)/feature_materialize
 
+# daily_predict is also a container-image Lambda, same reason as
+# daily_feature_materialize (feast[aws]'s dependency closure). Its own
+# closure is bigger: predict.py pulls in batter_lineup.py's full import
+# graph (data_readers.py, data/modules/preprocessing.py — the last one is a
+# real nested package import, not a flat sibling, so its directory
+# structure must be preserved, not flattened). Builds the image locally
+# only; no push (separate, explicitly-confirmed step against a real ECR
+# repo, same convention as build-feature-materialize-image).
+build-predict-image:
+	rm -rf $(BUILD_DIR)/predict
+	mkdir -p $(BUILD_DIR)/predict/data/modules
+	cp src/lambdas/daily_predict/handler.py $(BUILD_DIR)/predict/
+	cp src/lambdas/daily_predict/predict.py $(BUILD_DIR)/predict/
+	cp src/lambdas/daily_predict/requirements.txt $(BUILD_DIR)/predict/
+	cp src/lambdas/daily_predict/Dockerfile $(BUILD_DIR)/predict/
+	cp src/shared/model_registry.py src/shared/status_writer.py $(BUILD_DIR)/predict/
+	cp src/features/transforms/batter_lineup.py src/features/transforms/data_readers.py $(BUILD_DIR)/predict/
+	cp src/features/feature_store.yaml $(BUILD_DIR)/predict/
+	cp src/data/__init__.py $(BUILD_DIR)/predict/data/
+	cp src/data/modules/__init__.py src/data/modules/preprocessing.py $(BUILD_DIR)/predict/data/modules/
+	cd $(BUILD_DIR)/predict && docker build -t daily_predict:local .
+	rm -rf $(BUILD_DIR)/predict
+
 deploy-all:
 	$(MAKE) clean
 	$(MAKE) deploy-mlb-fetch

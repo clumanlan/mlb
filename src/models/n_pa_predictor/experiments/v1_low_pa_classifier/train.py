@@ -59,6 +59,7 @@ Requires AWS credentials with read access to s3://mlbdk (us-east-2).
 # else (WHIP), which is exactly what this experiment tests for.
 # ---------------------------------------------------------------------------- #
 
+import sys
 import yaml
 from datetime import datetime
 from pathlib import Path
@@ -72,8 +73,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler, OrdinalEncoder
-from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     log_loss, brier_score_loss, roc_auc_score, average_precision_score,
     precision_score, recall_score, f1_score, precision_recall_curve,
@@ -92,10 +92,19 @@ import models.hit_predictor.processing.pipeline as hp_pipeline
 from models.hit_predictor.processing.features import season_stats
 from models.hit_predictor.processing.features import game_context
 from models.hit_predictor.processing.features import rolling_stats
+from models.hit_predictor.utils.model_prep import impute_and_encode
 
 import models.n_pa_predictor.processing.pipeline as pipeline
 from models.n_pa_predictor.processing.features.batter_playing_time import build_batter_pa_rolling_stats
 from models.n_pa_predictor.utils.threshold_eval import wilson_ci, XGB_PARAMS
+
+# src/shared/ has no __init__.py (built for Lambda's flat sibling-import
+# convention) and collides with an unrelated, real `shared` package at the
+# repo root (shared/model_dashboard) if imported as `shared.model_registry`
+# — so import it as a flat module off an explicit sys.path entry instead.
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "shared"))
+from model_registry import register_model, snapshot_feature_schema
+from features.feature import batter_lineup_fv, batter_pa_volume_fv
 
 STAGE = Path(__file__).parent.name
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -255,16 +264,19 @@ batter_game = batter_game.merge(
 
 
 # ── 4. Season-based train / val / test split ─────────────────────────────────
+# 2026-09-21: reduced from the original 9-feature set (see the v1 SUMMARY
+# header above for that history) to the 2 features confirmed load-bearing by
+# ablation/ablation_results.md's backward elimination — the other 7 kept
+# precision-at-0.85 within the 9-feature baseline's Wilson CI when dropped,
+# so they were passengers, not signal. This promotion also closes a real
+# train/serve mismatch: the Feast feature store built for this model
+# (src/features/feature.py's batter_lineup_fv/batter_pa_volume_fv) only ever
+# computed these same 2 features, so the 9-feature model could never actually
+# have been served by daily_predict without separately computing the other 7
+# outside the feature store. See model-registry work in DECISIONS.md.
 FEATURE_COLS = [
     "batting_order",
-    "is_home",
-    "expected_start_innings",
-    "expected_start_innings_weight",
-    "opp_starter_whip_season",
-    "batter_n_pa_roll_season_games_n",
     "batter_n_pa_roll_season_avg_n_pa_per_game",
-    "team_roll_season_win_pct",
-    "team_roll_season_runs_scored",
 ]
 FEATURE_COLS = [c for c in FEATURE_COLS if c in batter_game.columns]
 
@@ -289,35 +301,7 @@ num_cols = [c for c in FEATURE_COLS if pd.api.types.is_numeric_dtype(X_train[c])
 cat_cols = [c for c in FEATURE_COLS if c not in num_cols]
 
 
-def encode(X_tr, X_ev, cat_cols, num_cols):
-    X_tr = X_tr.copy()
-    X_ev = X_ev.copy()
-    if num_cols:
-        X_tr[num_cols] = X_tr[num_cols].apply(pd.to_numeric, errors="coerce")
-        X_ev[num_cols] = X_ev[num_cols].apply(pd.to_numeric, errors="coerce")
-    if cat_cols:
-        X_tr[cat_cols] = X_tr[cat_cols].astype(object)
-        X_ev[cat_cols] = X_ev[cat_cols].astype(object)
-
-    num_imp = SimpleImputer(strategy="median")
-    Xtr_num = num_imp.fit_transform(X_tr[num_cols]) if num_cols else np.empty((len(X_tr), 0))
-    Xev_num = num_imp.transform(X_ev[num_cols])     if num_cols else np.empty((len(X_ev), 0))
-
-    if cat_cols:
-        cat_imp = SimpleImputer(strategy="most_frequent")
-        Xtr_cat_imp = cat_imp.fit_transform(X_tr[cat_cols])
-        Xev_cat_imp = cat_imp.transform(X_ev[cat_cols])
-        enc = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
-        Xtr_cat = enc.fit_transform(Xtr_cat_imp)
-        Xev_cat = enc.transform(Xev_cat_imp)
-    else:
-        Xtr_cat = np.empty((len(X_tr), 0))
-        Xev_cat = np.empty((len(X_ev), 0))
-
-    return np.hstack([Xtr_num, Xtr_cat]), np.hstack([Xev_num, Xev_cat])
-
-
-Xtr, Xval = encode(X_train, X_val, cat_cols, num_cols)
+Xtr, Xval = impute_and_encode(X_train, X_val, num_cols, cat_cols)
 
 
 # ── 5. Naive floors ────────────────────────────────────────────────────────────
@@ -546,3 +530,28 @@ for name, model, p in (("Logistic regression", lr, lr_prob), ("XGBoost", xgb_mod
         ],
     )
 print("\nLogged to MLflow (experiment: n_pa_predictor)")
+
+
+# ── 12. Model registry ────────────────────────────────────────────────────────
+# Production plan step 4 (ROADMAP.md) — serialize the locked model to S3, tied
+# to the real Feast FeatureView schema it trains against, so daily_predict
+# (step 5) has a self-describing artifact to load rather than re-deriving one.
+OPERATING_THRESHOLD = 0.85
+threshold_row = sweep_df[
+    (sweep_df["model"] == "XGBoost") & (sweep_df["threshold"] == OPERATING_THRESHOLD)
+].iloc[0]
+
+registry_version = register_model(
+    model_name="n_pa_predictor_low_pa",
+    model=xgb_model,
+    feature_schema=snapshot_feature_schema([batter_lineup_fv, batter_pa_volume_fv]),
+    operating_threshold=OPERATING_THRESHOLD,
+    metrics={
+        "precision": threshold_row["precision"],
+        "precision_ci_low": threshold_row["ci_low"],
+        "precision_ci_high": threshold_row["ci_high"],
+        "n": int(threshold_row["n"]),
+        "val_season": VAL_SEASON,
+    },
+)
+print(f"Registered model n_pa_predictor_low_pa, version {registry_version}")

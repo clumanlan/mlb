@@ -23,7 +23,7 @@ Pipeline layers, in order:
 - Layer 3 — Feature Engineering (rolling-window features to S3) — **in progress**
 - Layer 4 — Feature Store (Feast, offline S3, online DynamoDB) — **in progress**: 2 features (`n_pa_predictor`'s `batting_order`, `avg_n_pa_per_game`) run live, event-triggered off real lineup confirmations, proven end-to-end into DynamoDB
 - Layer 5 — Model Training (XGBoost baseline to attention model) — **in progress**
-- Layer 6 — Prediction Pipeline (daily batch inference, lineup-aware) — **not started**
+- Layer 6 — Prediction Pipeline (daily batch inference, lineup-aware) — **in progress**: `daily_predict` is deployed and proven live for `n_pa_predictor`'s `low_pa` model — `daily_feature_materialize` invokes it directly, confirmed via real CloudWatch logs and a real prediction written to S3
 - Layer 7 — MLOps (MLflow, Evidently AI, CloudWatch) — **not started**
 
 Layer 3's feature functions are tested and reusable, but every model still re-pulls and rebuilds full-season data in a one-off script rather than a scheduled incremental job — see `CLAUDE.md` for the full layer breakdown.

@@ -1,0 +1,33 @@
+numpy==2.3.1
+pandas==2.3.3
+pyarrow==25.0.1
+feast[aws]==0.62.0
+# feast[aws]==0.62.0 caps fsspec<=2024.9.0 (unlike the root requirements.txt,
+# which doesn't need to satisfy that cap since awswrangler pulls its own
+# fsspec range) — pinning s3fs==2026.7.0 here like the root file does would
+# force an unresolvable fsspec conflict. Left unpinned so pip picks an s3fs
+# version compatible with feast's actual ceiling. Same reasoning as
+# daily_feature_materialize's requirements.txt.
+s3fs
+# xgboost itself is intentionally NOT listed here — see Dockerfile, which
+# installs it with --no-deps to skip nvidia-nccl-cu13 (a 347MB GPU library
+# xgboost's wheel requires unconditionally on Linux, per its own METADATA,
+# purely for multi-GPU distributed training this CPU-only Lambda never
+# does — confirmed real via `docker push` failing repeatedly on that exact
+# oversized layer). scipy below is xgboost's one real runtime dependency.
+scipy==1.18.1
+# XGBoost's sklearn-wrapper class (XGBClassifier, what load_model() in
+# model_registry.py reconstructs) needs scikit-learn actually installed to
+# construct at all, regardless of whether any sklearn-specific method is
+# ever called — confirmed via a real local container smoke test
+# (ImportError: sklearn needs to be installed in order to use this module).
+scikit-learn==1.8.0
+# awswrangler==3.12.1 (the repo-root pin, validated for the local dev venv)
+# declares pyarrow<21.0.0 on non-darwin/x86_64 platforms — genuinely
+# incompatible with feast's pyarrow>=21.0.0 once actually resolved on this
+# container's linux/arm64 base image (the root pin only "works" locally
+# because darwin is platform-exempted from that constraint, an exemption
+# that doesn't apply here). awswrangler==3.17.1 relaxed the constraint to
+# pyarrow<26.0.0,>=8.0.0 with no platform condition — confirmed via its
+# real wheel METADATA, not just trusting a looser range would resolve.
+awswrangler==3.17.1

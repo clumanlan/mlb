@@ -18,5 +18,7 @@ pyarrow==25.0.1
 feast[aws]==0.62.0
 aiobotocore==2.23.1
 s3fs==2026.7.0
+xgboost==3.4.1
+scikit-learn==1.8.0
 
 pytest==7.4.0

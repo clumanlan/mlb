@@ -10,6 +10,7 @@ _handler_path = os.path.abspath(
 
 _heavy_mocks = {
     "feast": MagicMock(),
+    "boto3": MagicMock(),
 }
 
 with patch.dict(sys.modules, _heavy_mocks):
@@ -44,3 +45,24 @@ def test_handler_returns_500_on_materialize_error():
     assert response['statusCode'] == 500
     body = json.loads(response['body'])
     assert 'feast down' in body['error']
+
+
+def test_handler_invokes_predict_lambda_on_success():
+    mock_store = MagicMock()
+    with patch.object(feature_materialize_handler, 'FeatureStore', return_value=mock_store), \
+         patch.object(feature_materialize_handler, 'lambda_client') as mock_lambda_client:
+        feature_materialize_handler.lambda_handler({}, {})
+
+    mock_lambda_client.invoke.assert_called_once_with(
+        FunctionName='daily_predict', InvocationType='Event',
+    )
+
+
+def test_handler_does_not_invoke_predict_when_materialize_fails():
+    mock_store = MagicMock()
+    mock_store.materialize_incremental.side_effect = RuntimeError("feast down")
+    with patch.object(feature_materialize_handler, 'FeatureStore', return_value=mock_store), \
+         patch.object(feature_materialize_handler, 'lambda_client') as mock_lambda_client:
+        feature_materialize_handler.lambda_handler({}, {})
+
+    mock_lambda_client.invoke.assert_not_called()

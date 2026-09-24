@@ -634,6 +634,7 @@ resource "aws_iam_role_policy" "lambda_dynamodb_feast" {
       Effect = "Allow"
       Action = [
         "dynamodb:GetItem",
+        "dynamodb:BatchGetItem",
         "dynamodb:PutItem",
         "dynamodb:BatchWriteItem",
         "dynamodb:DescribeTable"
@@ -641,6 +642,77 @@ resource "aws_iam_role_policy" "lambda_dynamodb_feast" {
       Resource = [
         "arn:aws:dynamodb:${var.aws_region}:*:table/mlb_predictions.*"
       ]
+    }]
+  })
+}
+
+# daily_predict (Model Registry / Production plan step 5): batch inference
+# Lambda — pulls today's confirmed lineups, reads batter_pa_volume_fv from
+# Feast's online store (get_online_features -> DynamoDB batch_get_item,
+# hence BatchGetItem above — the dynamodb_feast policy above only covered
+# materialize_incremental()'s write path until this was added), loads the
+# registered model from s3://mlbdk/models/n_pa_predictor_low_pa/latest.json,
+# and writes predictions to s3://mlbdk/predictions/. Also a container-image
+# Lambda, same reason as daily_feature_materialize — its own closure is
+# bigger (predict.py pulls in batter_lineup.py's full import graph), see
+# the Makefile's build-predict-image target and the Dockerfile's comments.
+resource "aws_ecr_repository" "predict" {
+  name                 = "${var.project_name}-daily-predict"
+  image_tag_mutability = "MUTABLE"
+}
+
+resource "aws_ecr_repository_policy" "predict" {
+  repository = aws_ecr_repository.predict.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "LambdaECRImageRetrievalPolicy"
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action = [
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ]
+      Condition = {
+        StringLike = {
+          "aws:sourceArn" = "arn:aws:lambda:${var.aws_region}:685464669237:function:daily_predict"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_lambda_function" "predict" {
+  depends_on    = [aws_ecr_repository_policy.predict]
+  function_name = "daily_predict"
+  role          = aws_iam_role.lambda_role.arn
+  package_type  = "Image"
+  image_uri     = "${aws_ecr_repository.predict.repository_url}:latest"
+  timeout       = 300
+  memory_size   = 1024
+  # Built on Apple Silicon (Docker's native default) like
+  # daily_feature_materialize's image — must match or Lambda's default
+  # x86_64 assumption produces a real ProcessSpawnFailed at invoke time.
+  architectures = ["arm64"]
+  lifecycle {
+    ignore_changes = [image_uri]
+  }
+}
+
+# daily_feature_materialize -> daily_predict: direct async invoke on
+# success (InvocationType="Event" in the handler), same two-hop pattern as
+# daily_feature_create -> daily_feature_materialize above.
+resource "aws_iam_role_policy" "lambda_invoke_predict" {
+  name = "${var.project_name}-lambda-invoke-predict-policy"
+  role = aws_iam_role.lambda_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "lambda:InvokeFunction"
+      Resource = aws_lambda_function.predict.arn
     }]
   })
 }
