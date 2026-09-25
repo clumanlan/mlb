@@ -73,6 +73,29 @@ function formatTotal(total) {
   return `O/U ${total.point} (${formatPrice(total.over_price)}/${formatPrice(total.under_price)})`
 }
 
+// === PredictionCell sub-component ===
+// Props: prediction = game.prediction from /api/today-slate, or null.
+//
+// null means either the lineup isn't confirmed yet (no batters to predict on)
+// or the predictions file for today hasn't landed in S3 yet — both render the
+// same muted dash, since the UI can't tell the two apart from this field alone.
+function PredictionCell({ prediction }) {
+  if (!prediction) {
+    return <span className="muted">—</span>
+  }
+
+  if (prediction.qualifying_count === 0) {
+    return <span className="muted">No low-PA risk</span>
+  }
+
+  const names = prediction.batters.map(b => b.name).join(', ')
+  return (
+    <span title={names}>
+      {prediction.qualifying_count} low-PA risk
+    </span>
+  )
+}
+
 // === GameRow sub-component ===
 // Props: game = one item from the API response's games array.
 //
@@ -122,8 +145,11 @@ function GameRow({ game }) {
         )}
       </td>
 
-      {/* Prediction: always — for now. Stage 2 will fill this in. */}
-      <td className="col-prediction muted">—</td>
+      {/* Prediction: n_pa_predictor_low_pa's flagged (qualifying) batters for
+          this game, once its lineup is confirmed and predictions have run. */}
+      <td className="col-prediction">
+        <PredictionCell prediction={game.prediction} />
+      </td>
     </tr>
   )
 }

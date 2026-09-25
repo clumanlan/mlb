@@ -6,6 +6,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+import batter_predictions
 import completeness_audit
 import s3_client
 import starting_pitcher_predictions
@@ -49,6 +50,31 @@ def _normalize_schedule_parquet(df) -> list:
             "status": row["status"],
         })
     return rows
+
+
+def _load_player_names() -> dict:
+    """{person_id: player_name} lookup from the (non-date-partitioned) player_info table."""
+    try:
+        player_info_df = s3_client.get_s3_parquet(S3_BUCKET, "reference/player_info/player_info.parquet")
+        return dict(zip(player_info_df["person_id"], player_info_df["player_name"]))
+    except FileNotFoundError:
+        return {}
+
+
+def _load_lineups_by_game(year: str, date_str: str, games: list) -> dict:
+    """{game_pk: lineup_payload} for every game whose lineup file already exists —
+    written by daily_lineup_fetch once a game's lineup confirms. Games not yet
+    confirmed simply have no entry."""
+    lineups = {}
+    for game in games:
+        game_pk = game["game_pk"]
+        try:
+            lineups[game_pk] = s3_client.get_s3_json(
+                S3_BUCKET, f"raw_data/games/lineups/{year}/{date_str}/{game_pk}.json"
+            )
+        except FileNotFoundError:
+            continue
+    return lineups
 
 
 def _load_schedule(year: str, date_str: str, use_latest: bool) -> list:
@@ -161,6 +187,17 @@ def today_slate(date_param: Optional[str] = Query(default=None, alias="date")):
         odds_pairs = set()
         odds_by_pair = {}
 
+    predictions_by_game = {}
+    try:
+        predictions_df = s3_client.get_s3_parquet(
+            S3_BUCKET, f"predictions/{batter_predictions.MODEL_NAME}/{year}/{target_date}.parquet"
+        )
+        predictions_by_game = batter_predictions.summarize_predictions_by_game(
+            predictions_df, _load_player_names()
+        )
+    except FileNotFoundError:
+        pass
+
     games = []
     for game in sorted(schedule, key=lambda g: g["game_time_utc"]):
         game_pk_str = str(game["game_pk"])
@@ -177,7 +214,7 @@ def today_slate(date_param: Optional[str] = Query(default=None, alias="date")):
             "lineup_status": lineup_status,
             "has_odds": (home, away) in odds_pairs,
             "odds": extract_game_odds(odds_by_pair.get((home, away))),
-            "prediction": None,
+            "prediction": predictions_by_game.get(game_pk_str),
         })
         
     lineup_last_checked = lineup_states.get("last_checked") if isinstance(lineup_states, dict) else None
@@ -198,11 +235,14 @@ def season_completeness(year: Optional[str] = Query(default=None)):
 def starting_pitcher_predictions_route():
     """
     Batters-faced / strikeouts / early-out predictions for today's starting pitchers.
-    Placeholder data — see starting_pitcher_predictions.py's module docstring for why.
+    No real model deployed yet — see starting_pitcher_predictions.py's module docstring.
+    Pitcher names ARE real, resolved from each confirmed game's lineup file.
     """
     year = str(date.today().year)
-    games = _load_schedule(year, str(date.today()), use_latest=True)
-    return starting_pitcher_predictions.get_placeholder_predictions(games)
+    today_str = str(date.today())
+    games = _load_schedule(year, today_str, use_latest=True)
+    lineups_by_game = _load_lineups_by_game(year, today_str, games)
+    return starting_pitcher_predictions.get_predictions(games, lineups_by_game, _load_player_names())
 
 
 @app.get("/api/pipeline-status")

@@ -3,16 +3,18 @@
 // each of the three pitcher-based predictions side by side so they're easy to scan
 // and compare across today's whole slate.
 //
-// SAMPLE DATA: none of batters_faced_predictor, k_predictor, or short_outing_predictor
-// have a production inference path yet, so the backend serves fixed placeholder
-// numbers attached to today's REAL games (see dashboard/backend/starting_pitcher_predictions.py).
-// This section exists to settle the table's layout and the game<->pitcher link now;
-// swap in real numbers once a model is wired up — no change needed here, only on the backend.
+// NO MODEL YET: none of batters_faced_predictor, k_predictor, or short_outing_predictor
+// have a production inference path yet, so the backend attaches null for every stat
+// field (see dashboard/backend/starting_pitcher_predictions.py) alongside today's REAL
+// games/teams. Every stat cell below renders a plain dash until a model is deployed —
+// same convention as the missing-odds/missing-prediction cells in TodaysSlate.jsx.
 import { useState, useEffect } from 'react'
 import { getGameColor } from '../lib/gameColor.js'
 
+const DASH = <span className="muted">—</span>
+
 function formatPercent(value) {
-  return `${Math.round(value * 100)}%`
+  return value == null ? DASH : `${Math.round(value * 100)}%`
 }
 
 // American odds display convention: positive gets an explicit "+", negative
@@ -30,6 +32,10 @@ function formatEdge(edge) {
 }
 
 function EdgeCell({ pitcher }) {
+  if (pitcher.strikeouts_edge == null) {
+    return <td className="mono">{DASH}</td>
+  }
+
   const isPositive = pitcher.strikeouts_edge >= 0
   const tooltip = `model P(over) ${formatPercent(pitcher.model_prob_strikeouts_over)} vs. ` +
     `devigged market P(over) ${formatPercent(pitcher.fair_prob_strikeouts_over)}`
@@ -43,18 +49,27 @@ function EdgeCell({ pitcher }) {
   )
 }
 
+function KLineCell({ pitcher }) {
+  if (pitcher.strikeout_line == null) {
+    return <td className="mono">{DASH}</td>
+  }
+  return (
+    <td className="mono">
+      O/U {pitcher.strikeout_line} ({formatOdds(pitcher.strikeout_over_odds)}/{formatOdds(pitcher.strikeout_under_odds)})
+    </td>
+  )
+}
+
 function PitcherRow({ pitcher }) {
   return (
     <tr>
       <td className="col-matchup">{pitcher.pitcher_name}</td>
       <td>{pitcher.team}</td>
       <td className="muted">{pitcher.opponent}</td>
-      <td className="mono">{pitcher.batters_faced_pred}</td>
-      <td className="mono">{pitcher.strikeouts_pred}</td>
+      <td className="mono">{pitcher.batters_faced_pred ?? DASH}</td>
+      <td className="mono">{pitcher.strikeouts_pred ?? DASH}</td>
       <td className="mono">{formatPercent(pitcher.early_out_probability)}</td>
-      <td className="mono">
-        O/U {pitcher.strikeout_line} ({formatOdds(pitcher.strikeout_over_odds)}/{formatOdds(pitcher.strikeout_under_odds)})
-      </td>
+      <KLineCell pitcher={pitcher} />
       <EdgeCell pitcher={pitcher} />
     </tr>
   )
@@ -132,14 +147,14 @@ export default function StartingPitcherPredictions() {
     )
   }
 
-  const { pitchers, is_sample_data } = data
+  const { pitchers, has_predictions } = data
   const gameGroups = groupByGame(pitchers)
 
   return (
     <section className="section">
       <div className="section-header">
         <span className="section-label">Starting Pitcher Predictions</span>
-        {is_sample_data && <span className="stage-pill">sample data</span>}
+        {!has_predictions && <span className="stage-pill">no model deployed yet</span>}
       </div>
       <span className="section-caption">predicted, not realized</span>
 
@@ -153,7 +168,7 @@ export default function StartingPitcherPredictions() {
               <th>Batters Faced</th>
               <th>Strikeouts</th>
               <th>Early Out %</th>
-              <th title="DraftKings pitcher_strikeouts market — sample data, not live">K Line (O/U)</th>
+              <th title="DraftKings pitcher_strikeouts market">K Line (O/U)</th>
               <th title="Model P(over) minus devigged market P(over) — hover a value for the breakdown">K Edge</th>
             </tr>
           </thead>

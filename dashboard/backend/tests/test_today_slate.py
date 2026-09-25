@@ -81,6 +81,17 @@ ODDS_DF_WITH_MARKETS = pd.DataFrame([
 ])
 
 
+def _odds_only_parquet_side_effect(odds_df):
+    """get_s3_parquet mock: return odds_df for the odds key, 404 for anything else
+    (predictions, player_info) — keeps these odds-focused tests from tripping over
+    the unrelated predictions lookup added to today_slate."""
+    def side_effect(bucket, key):
+        if "odds" in key:
+            return odds_df
+        raise FileNotFoundError(f"not mocked: {key}")
+    return side_effect
+
+
 def _schedule_side_effect(bucket, prefix):
     if "schedule" in prefix:
         return SCHEDULE
@@ -178,7 +189,7 @@ class TestTodaysSlateRoute:
 
     def test_has_odds_true_when_teams_match(self):
         with patch("main.s3_client.get_latest_s3_json", side_effect=_schedule_side_effect), \
-             patch("main.s3_client.get_s3_parquet", return_value=ODDS_DF):
+             patch("main.s3_client.get_s3_parquet", side_effect=_odds_only_parquet_side_effect(ODDS_DF)):
             body = client.get("/api/today-slate").json()
 
         games = {g["game_pk"]: g for g in body["games"]}
@@ -194,7 +205,7 @@ class TestTodaysSlateRoute:
 
     def test_odds_field_populated_with_run_line_and_total_when_dk_markets_present(self):
         with patch("main.s3_client.get_latest_s3_json", side_effect=_schedule_side_effect), \
-             patch("main.s3_client.get_s3_parquet", return_value=ODDS_DF_WITH_MARKETS):
+             patch("main.s3_client.get_s3_parquet", side_effect=_odds_only_parquet_side_effect(ODDS_DF_WITH_MARKETS)):
             body = client.get("/api/today-slate").json()
 
         games = {g["game_pk"]: g for g in body["games"]}
@@ -206,7 +217,7 @@ class TestTodaysSlateRoute:
 
     def test_odds_field_none_when_odds_row_has_no_markets(self):
         with patch("main.s3_client.get_latest_s3_json", side_effect=_schedule_side_effect), \
-             patch("main.s3_client.get_s3_parquet", return_value=ODDS_DF):
+             patch("main.s3_client.get_s3_parquet", side_effect=_odds_only_parquet_side_effect(ODDS_DF)):
             body = client.get("/api/today-slate").json()
 
         games = {g["game_pk"]: g for g in body["games"]}
@@ -219,10 +230,35 @@ class TestTodaysSlateRoute:
 
         assert all(g["odds"] is None for g in body["games"])
 
-    def test_prediction_is_always_none(self):
+    def test_prediction_is_none_when_predictions_file_missing(self):
         with patch("main.s3_client.get_latest_s3_json", side_effect=_schedule_side_effect), \
              patch("main.s3_client.get_s3_parquet", side_effect=FileNotFoundError("no odds")):
             body = client.get("/api/today-slate").json()
 
         for game in body["games"]:
             assert game["prediction"] is None
+
+    def test_prediction_populated_for_game_with_predictions_data(self):
+        predictions_df = pd.DataFrame([
+            {"personId": 680779, "gamepk": "745124", "batting_order": 9,
+             "predicted_probability": 0.91, "qualifies": True},
+        ])
+        player_info_df = pd.DataFrame([
+            {"person_id": 680779, "player_name": "Low PA Guy"},
+        ])
+
+        def parquet_side_effect(bucket, key):
+            if "predictions" in key:
+                return predictions_df
+            if "player_info" in key:
+                return player_info_df
+            raise FileNotFoundError("no odds")
+
+        with patch("main.s3_client.get_latest_s3_json", side_effect=_schedule_side_effect), \
+             patch("main.s3_client.get_s3_parquet", side_effect=parquet_side_effect):
+            body = client.get("/api/today-slate").json()
+
+        games = {g["game_pk"]: g for g in body["games"]}
+        assert games[745124]["prediction"]["qualifying_count"] == 1
+        assert games[745124]["prediction"]["batters"][0]["name"] == "Low PA Guy"
+        assert games[745123]["prediction"] is None
