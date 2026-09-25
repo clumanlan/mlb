@@ -3,7 +3,7 @@ import logging
 import os
 import boto3
 import statsapi
-from datetime import datetime, timedelta
+from datetime import datetime
 from status_writer import write_status
 
 logger = logging.getLogger()
@@ -14,7 +14,6 @@ S3_BUCKET = "mlbdk"
 #   s3:GetObject      — read schedule + game_states
 #   s3:PutObject      — write lineups + game_states + status file
 #   events:DisableRule — disable own EventBridge rule on completion
-HARD_CUTOFF_MINUTES = int(os.environ.get("HARD_CUTOFF_MINUTES", 30))
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -147,19 +146,17 @@ def handler(event, context):
         schedule = read_schedule(date)
         schedule_by_pk = {str(g["game_pk"]): g for g in schedule}
 
-        first_pitch_utc = min(
-            datetime.strptime(g["game_time_utc"], "%Y-%m-%dT%H:%M:%SZ") for g in schedule
-        )
-        cutoff = first_pitch_utc - timedelta(minutes=HARD_CUTOFF_MINUTES)
-
-        if datetime.utcnow() >= cutoff:
-            for game_pk, state in states["games"].items():
-                if state == "PENDING":
-                    states["games"][game_pk] = "SKIPPED"
-                    logger.info(f"cutoff reached, skipping: {game_pk}")
-            write_game_states(date, states)
-            finish(date, states)
-            return {"statusCode": 200, "body": "cutoff reached — all pending games skipped"}
+        now = datetime.utcnow()
+        for game_pk, state in states["games"].items():
+            if state != "PENDING":
+                continue
+            game = schedule_by_pk.get(game_pk)
+            if game is None:
+                continue
+            game_time_utc = datetime.strptime(game["game_time_utc"], "%Y-%m-%dT%H:%M:%SZ")
+            if now >= game_time_utc:
+                states["games"][game_pk] = "SKIPPED"
+                logger.info(f"game started, skipping: {game_pk}")
 
         for game_pk, state in states["games"].items():
             if state != "PENDING":

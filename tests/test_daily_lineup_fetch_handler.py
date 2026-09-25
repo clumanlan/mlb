@@ -2,7 +2,7 @@ import sys
 import os
 import json
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 from botocore.exceptions import ClientError
 
@@ -72,10 +72,55 @@ FUTURE_SCHEDULE = [
     }
 ]
 
+# Two games, both with a past first pitch — for scenarios needing multiple
+# real (schedule-backed) games that are each individually past cutoff
+PAST_SCHEDULE_TWO_GAMES = [
+    {
+        "game_pk": 745453,
+        "home_team_id": 111,
+        "away_team_id": 147,
+        "game_time_utc": "2000-01-01T00:00:00Z",
+    },
+    {
+        "game_pk": 745454,
+        "home_team_id": 121,
+        "away_team_id": 137,
+        "game_time_utc": "2000-01-01T00:00:00Z",
+    },
+]
+
+# One game whose own first pitch has passed cutoff, one whose own first pitch
+# is far in the future — exercises per-game (not whole-slate) cutoff evaluation
+MIXED_SCHEDULE = [
+    {
+        "game_pk": 745453,
+        "home_team_id": 111,
+        "away_team_id": 147,
+        "game_time_utc": "2000-01-01T00:00:00Z",
+    },
+    {
+        "game_pk": 745454,
+        "home_team_id": 121,
+        "away_team_id": 137,
+        "game_time_utc": "2099-12-31T23:59:00Z",
+    },
+]
+
 ENV = {
     "LINEUP_EVENTBRIDGE_RULE_NAME": "mlbdk-daily-lineup-fetch",
-    "HARD_CUTOFF_MINUTES": "30",
 }
+
+
+def _schedule_starting_in(minutes, game_pk=745453):
+    game_time = (datetime.utcnow() + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return [
+        {
+            "game_pk": game_pk,
+            "home_team_id": 111,
+            "away_team_id": 147,
+            "game_time_utc": game_time,
+        }
+    ]
 
 
 def _client_error(code="NoSuchKey"):
@@ -439,7 +484,7 @@ class TestHandlerHardCutoff:
     def test_handler_marks_pending_as_skipped_when_cutoff_reached(self):
         mock_wgs = MagicMock()
         with patch("handler.read_game_states", return_value=self._pending_states()), \
-             patch("handler.read_schedule", return_value=PAST_SCHEDULE), \
+             patch("handler.read_schedule", return_value=PAST_SCHEDULE_TWO_GAMES), \
              patch("handler.write_game_states", mock_wgs), \
              patch("handler.finish"), \
              patch("handler.write_status"), \
@@ -474,6 +519,96 @@ class TestHandlerHardCutoff:
             from handler import handler
             handler({"date": "2026-05-09"}, {})
         mock_fb.assert_not_called()
+
+    def test_handler_skips_only_the_game_past_its_own_cutoff(self):
+        # Bug: cutoff was computed once from the earliest game in the whole
+        # slate, so a late game got skipped just because an earlier game in
+        # the same day's schedule reached its cutoff. Cutoff must be
+        # evaluated per-game, using that game's own game_time_utc.
+        mock_wgs = MagicMock()
+        with patch("handler.read_game_states", return_value=self._pending_states(("745453", "745454"))), \
+             patch("handler.read_schedule", return_value=MIXED_SCHEDULE), \
+             patch("handler.fetch_boxscore", return_value=FAKE_BOXSCORE_EMPTY), \
+             patch("handler.write_game_states", mock_wgs), \
+             patch("handler.finish"), \
+             patch("handler.write_status"), \
+             patch.dict("os.environ", ENV):
+            from handler import handler
+            handler({"date": "2026-05-09"}, {})
+        written = mock_wgs.call_args.args[1]
+        assert written["games"]["745453"] == "SKIPPED"
+        assert written["games"]["745454"] == "PENDING"
+
+    def test_handler_polls_boxscore_for_game_not_yet_past_its_own_cutoff(self):
+        # The old global-cutoff branch returned early and never polled any
+        # game once the earliest game in the slate reached cutoff. A game
+        # that hasn't reached its own cutoff must still be polled.
+        mock_fb = MagicMock(return_value=FAKE_BOXSCORE_EMPTY)
+        with patch("handler.read_game_states", return_value=self._pending_states(("745453", "745454"))), \
+             patch("handler.read_schedule", return_value=MIXED_SCHEDULE), \
+             patch("handler.fetch_boxscore", mock_fb), \
+             patch("handler.write_game_states"), \
+             patch("handler.finish"), \
+             patch("handler.write_status"), \
+             patch.dict("os.environ", ENV):
+            from handler import handler
+            handler({"date": "2026-05-09"}, {})
+        mock_fb.assert_called_once_with("745454")
+
+    def test_handler_does_not_call_finish_when_a_game_is_still_pending_before_its_cutoff(self):
+        # finish() disables the EventBridge polling rule for the rest of the
+        # day. It must not fire just because one early game reached cutoff
+        # while a later game is still legitimately pending.
+        mock_finish = MagicMock()
+        with patch("handler.read_game_states", return_value=self._pending_states(("745453", "745454"))), \
+             patch("handler.read_schedule", return_value=MIXED_SCHEDULE), \
+             patch("handler.fetch_boxscore", return_value=FAKE_BOXSCORE_EMPTY), \
+             patch("handler.write_game_states"), \
+             patch("handler.finish", mock_finish), \
+             patch("handler.write_status"), \
+             patch.dict("os.environ", ENV):
+            from handler import handler
+            handler({"date": "2026-05-09"}, {})
+        mock_finish.assert_not_called()
+
+    def test_handler_still_polls_a_game_starting_soon_that_has_not_started_yet(self):
+        # No more fixed early-warning buffer: a game isn't skipped just for
+        # being close to first pitch — only once it has actually started.
+        mock_fb = MagicMock(return_value=FAKE_BOXSCORE_EMPTY)
+        with patch("handler.read_game_states", return_value=self._pending_states(("745453",))), \
+             patch("handler.read_schedule", return_value=_schedule_starting_in(2)), \
+             patch("handler.fetch_boxscore", mock_fb), \
+             patch("handler.write_game_states"), \
+             patch("handler.finish"), \
+             patch("handler.write_status"), \
+             patch.dict("os.environ", ENV):
+            from handler import handler
+            handler({"date": "2026-05-09"}, {})
+        mock_fb.assert_called_once_with("745453")
+
+    def test_handler_skips_a_game_that_has_already_started(self):
+        mock_wgs = MagicMock()
+        with patch("handler.read_game_states", return_value=self._pending_states(("745453",))), \
+             patch("handler.read_schedule", return_value=_schedule_starting_in(-2)), \
+             patch("handler.write_game_states", mock_wgs), \
+             patch("handler.finish"), \
+             patch("handler.write_status"), \
+             patch.dict("os.environ", ENV):
+            from handler import handler
+            handler({"date": "2026-05-09"}, {})
+        written = mock_wgs.call_args.args[1]
+        assert written["games"]["745453"] == "SKIPPED"
+
+    def test_handler_calls_finish_once_every_game_has_passed_its_own_cutoff(self):
+        with patch("handler.read_game_states", return_value=self._pending_states(("745453", "745454"))), \
+             patch("handler.read_schedule", return_value=PAST_SCHEDULE_TWO_GAMES), \
+             patch("handler.write_game_states"), \
+             patch("handler.finish") as mock_finish, \
+             patch("handler.write_status"), \
+             patch.dict("os.environ", ENV):
+            from handler import handler
+            handler({"date": "2026-05-09"}, {})
+        mock_finish.assert_called_once()
 
 
 class TestHandlerPollingLoop:

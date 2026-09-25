@@ -400,7 +400,6 @@ resource "aws_lambda_function" "lineup_fetch" {
   environment {
     variables = {
       LINEUP_EVENTBRIDGE_RULE_NAME = "${var.project_name}-daily-lineup-fetch"
-      HARD_CUTOFF_MINUTES          = "30"
     }
   }
 }
