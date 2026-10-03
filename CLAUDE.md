@@ -308,6 +308,31 @@ These alarms and the DLQ key off Lambda's native unhandled-exception accounting 
 
 ---
 
+## Off-Season Pause / Resume
+
+The daily pipeline is paused for the off-season by disabling EventBridge rules — nothing is deleted (Lambda code, Step Functions definition, IAM roles, S3 data, DynamoDB/Feast state all stay as-is). See `DECISIONS.md`'s entry for the date this was last toggled.
+
+**Paused by disabling these 5 rules** (`aws events disable-rule --name <rule> --region us-east-2`):
+- `mlbdk-daily-fetch` — triggers the `mlbdk-daily-pipeline` Step Functions execution (`daily_mlb_fetch` → `daily_process_data`)
+- `mlbdk-daily-schedule-fetch`
+- `mlbdk-daily-dkslate-fetch`
+- `mlbdk-daily-lineup-fetch` — this is the one that matters most: disabling it stops the whole downstream feature/prediction chain too, since `daily_feature_create` only fires off the S3 lineup writes this rule produces, which cascades to `daily_feature_materialize` then `daily_predict`
+- `mlbdk-daily-odds-fetch` — also stops The Odds API billing while paused
+
+**To resume for a new season**, re-enable the same 5 rules:
+```bash
+for rule in mlbdk-daily-fetch mlbdk-daily-schedule-fetch mlbdk-daily-dkslate-fetch mlbdk-daily-lineup-fetch mlbdk-daily-odds-fetch; do
+  aws events enable-rule --name "$rule" --region us-east-2
+done
+```
+Verify with `aws events describe-rule --name <rule> --region us-east-2 --query State` — expect `ENABLED` on all 5.
+
+**Known side effects of pausing, not bugs:**
+- `mlbdk-odds-fetch-not-invoked` (CloudWatch alarm, fires on <1 invocation in 24h) will trip to `ALARM` and send one SNS email once the pause crosses 24h — expected, not a pipeline failure. Not silenced as part of the pause; if the email is unwanted, run `aws cloudwatch disable-alarm-actions --alarm-names mlbdk-odds-fetch-not-invoked --region us-east-2` (and re-enable with `enable-alarm-actions` after resuming).
+- `terraform plan` will show drift on the 5 `aws_cloudwatch_event_rule` resources (state says `enabled = true`, live reality is `DISABLED`) until either the rules are re-enabled to match state, or `enabled = false` is set in `terraform/main.tf` for the pause window. Not fixed in Terraform as part of this pause — the toggle was done directly via the CLI for speed and easy reversibility.
+
+---
+
 ## Test Coverage
 
 | Test file | What it covers |

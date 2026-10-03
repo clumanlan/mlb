@@ -2,6 +2,8 @@
 
 An ML system for MLB prop research (DraftKings): ingest game/odds data, build point-in-time-safe features, and test whether any prediction target here clears a naive baseline before it's treated as real signal.
 
+**Status: paused for the off-season** (since 2026-10-03) — the daily pipeline's EventBridge triggers are disabled, no infrastructure removed. See `CLAUDE.md`'s "Off-Season Pause / Resume" section for exact resume steps.
+
 ![Pre-game dashboard](dashboard/docs/screenshots/hero.png)
 
 ---

@@ -6,6 +6,14 @@ See `ROADMAP.md` for current priorities, the open backlog, and what's next — t
 
 ---
 
+## 2026-10-03 — Pipeline paused for the off-season
+
+Baseball season ended; the daily pipeline has no games to process until spring. Paused by disabling the 5 EventBridge rules that drive it (`mlbdk-daily-fetch`, `mlbdk-daily-schedule-fetch`, `mlbdk-daily-dkslate-fetch`, `mlbdk-daily-lineup-fetch`, `mlbdk-daily-odds-fetch`) rather than tearing down any infrastructure — chosen because it's fully reversible with a one-line `enable-rule` per rule and touches nothing else (Lambda code, Step Functions, IAM, S3/DynamoDB/Feast state all untouched). Disabling `mlbdk-daily-lineup-fetch` alone also halts the downstream `daily_feature_create` → `daily_feature_materialize` → `daily_predict` chain, since that chain only ever fires off the S3 lineup writes that rule produces — no separate action needed for those three Lambdas. Disabling `mlbdk-daily-odds-fetch` additionally stops The Odds API credit usage for the duration of the pause.
+
+Verified all 5 rules read `DISABLED` via `aws events describe-rule` after the change. Did not touch `mlbdk-odds-fetch-not-invoked` (the CloudWatch alarm that fires on <1 invocation/24h) — it's expected to trip once during the pause and send one SNS email; left as a known, harmless side effect rather than silenced, since disabling alarm actions is a separate, not-yet-approved change. Did not update Terraform to match (`enabled = false` on the 5 `aws_cloudwatch_event_rule` resources) — the live/state drift this creates is intentional and temporary; full runbook (exact commands, side effects, resume steps) now lives in `CLAUDE.md`'s "Off-Season Pause / Resume" section rather than duplicated here.
+
+---
+
 ## 2026-09-23 — `daily_predict` deployed for real: the Docker push blocker resolved, full production plan (steps 1-5) now live end to end
 
 Direct follow-up to the entry below — the local Docker Desktop proxy issue that blocked the ECR push for a full session turned out to be exactly that: a local Docker Desktop issue, not anything about the image or code. Restarting Docker Desktop cleared it.
