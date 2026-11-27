@@ -364,3 +364,28 @@ class TestGetAllHistoricalPlayerPropsPrelisted:
             result = get_all_historical_player_props("2025-04-09", api_key="k", games=games)
             mock_games.assert_not_called()
             assert result[0]["game"] == games[0]
+
+
+class TestApiKeyRedaction:
+    def _error_response(self, status):
+        import requests
+        resp = requests.models.Response()
+        resp.status_code = status
+        resp.reason = "Not Found"
+        resp.url = "https://api.the-odds-api.com/v4/historical/x/odds/?markets=pitcher_strikeouts&apiKey=supersecret123"
+        return resp
+
+    def test_http_error_message_does_not_contain_api_key(self):
+        # Real leak, caught 2026-11-27: requests' HTTPError message includes
+        # the full URL, so the key landed in logs (and, via the handler's
+        # write_status(error=str(e)), in the S3 status JSON).
+        import pytest
+        import requests
+        with patch("odds_fetch.requests.get", return_value=self._error_response(404)):
+            from odds_fetch import api_get
+            with pytest.raises(requests.exceptions.HTTPError) as exc:
+                api_get("https://api.the-odds-api.com/v4/historical/x/odds/", {}, api_key="supersecret123")
+        assert "supersecret123" not in str(exc.value)
+        assert "apiKey=REDACTED" in str(exc.value)
+        assert "404" in str(exc.value)
+        assert exc.value.response.status_code == 404

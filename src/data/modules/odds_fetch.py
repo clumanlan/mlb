@@ -34,7 +34,14 @@ def api_get(url, params, api_key, retries=3, delay=2):
             logger.warning(f"Rate limited, retrying in {wait}s...")
             time.sleep(wait)
         else:
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                # requests' message embeds the full URL, apiKey included --
+                # redact it, and drop the original (`from None`) so a logged
+                # traceback can't carry the key through the exception chain.
+                redacted = str(e).replace(api_key, "REDACTED")
+                raise requests.exceptions.HTTPError(redacted, response=e.response) from None
     raise Exception(f"Failed after {retries} retries")
 
 
