@@ -6,6 +6,22 @@ See `ROADMAP.md` for current priorities, the open backlog, and what's next — t
 
 ---
 
+## 2026-11-27 — 2025 historical odds backfill started; two `odds_fetch.py` bugs fixed
+
+Checked the Odds API quota during the off-season pause: 20,000 remaining, 0 used. The FAQ says credits reset on the 1st of every month but says nothing about rollover. Confirmed empirically that they don't roll over: October went mostly unused (the Lambda ran only Oct 1-3), yet November showed exactly 20,000. So the paused months were wasting the $30/mo plan. Decided to spend each month's credits on 2025 historical odds for backtesting, starting with `pitcher_strikeouts` for `k_predictor` since it's the only model with an open real-odds question (the 2026 backtest found no edge on n=1,160).
+
+**Bug 1, found before spending anything:** `get_historical_games` listed games over a UTC calendar day, dropping every game starting at or after 8pm ET. Checked against the 7 saved 2025 dates: 2025-09-09 had 8 of 15 games, 2025-07-09 had 10 of 15, and the dropped games matched the schedule's 00:00Z-or-later starts. Those games are never picked up by the next date either, because its 11:00Z listing snapshot is after first pitch. Fixed to a local-game-date window (11:00Z to 10:59:59Z next day), TDD'd. The old 7-date sample behind the 2026-08-31 `k_predictor` edge report is therefore missing most late games. That doesn't change its verdict, and the file is left as-is, since it's a frozen analysis.
+
+**The pull:** new `fetch_2025_season_odds.py` ran 2025-03-18 to 2025-08-14 (139 dates) and stopped at its 500-credit reserve at 19,430 used. Got 1,805 of 1,820 games with strikeout lines (99.2%), 6,944 rows. The 15 misses were genuine 404s in the archive. No day failed the listing-vs-schedule check. Files were written locally during the run, then uploaded to `s3://mlbdk/raw_data/odds/historical/pitcher_strikeouts/2025/`. Changed the script afterward to write each date to S3 as it lands and resume from S3, so a lost laptop can't lose paid data and a rerun from any machine never re-buys a date.
+
+**Bug 2, found in the run's own log:** 404 warnings printed the API key, because requests' `HTTPError` message embeds the full URL. The same path reaches CloudWatch, and via `write_status(error=str(e))` the S3 status JSON, for `daily_odds_fetch`. `api_get` now re-raises with the key redacted and the exception chain suppressed. TDD'd against a real `requests.Response`, deployed to `daily_odds_fetch`, and the local log was deleted. Key rotation is still pending.
+
+**Last of the month's credits:** reran the S3-writing version with no reserve (nothing to protect while paused), adding 2025-08-15 to 08-17 (45/45 games). That confirmed the resume-from-S3 path works for real. Month total: 19,940 of 20,000.
+
+**Market availability:** a 30-credit probe on one 2025 game confirmed DraftKings `pitcher_walks`, `pitcher_outs`, and `batter_hits` are all in the historical archive. Plan for the remaining off-season months is in `ROADMAP.md`'s "Off-season priority: 2025 historical odds" section. Shipped as PR #1 (rebase-merged).
+
+---
+
 ## 2026-10-03 — Pipeline paused for the off-season
 
 Baseball season ended; the daily pipeline has no games to process until spring. Paused by disabling the 5 EventBridge rules that drive it (`mlbdk-daily-fetch`, `mlbdk-daily-schedule-fetch`, `mlbdk-daily-dkslate-fetch`, `mlbdk-daily-lineup-fetch`, `mlbdk-daily-odds-fetch`) rather than tearing down any infrastructure — chosen because it's fully reversible with a one-line `enable-rule` per rule and touches nothing else (Lambda code, Step Functions, IAM, S3/DynamoDB/Feast state all untouched). Disabling `mlbdk-daily-lineup-fetch` alone also halts the downstream `daily_feature_create` → `daily_feature_materialize` → `daily_predict` chain, since that chain only ever fires off the S3 lineup writes that rule produces — no separate action needed for those three Lambdas. Disabling `mlbdk-daily-odds-fetch` additionally stops The Odds API credit usage for the duration of the pause.
