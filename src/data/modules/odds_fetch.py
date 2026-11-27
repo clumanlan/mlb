@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import logging
 import requests
 import time
@@ -87,13 +88,16 @@ def get_historical_games(date, snapshot_date, api_key):
     markets x regions rate -- use sparingly, for backtests only, never as a
     routine ops-recovery substitute for the live daily pipeline."""
     url = f"{HISTORICAL_BASE_URL}/sports/baseball_mlb/odds/"
+    next_day = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
     params = {
         "regions": "us",
         "markets": "h2h",
         "oddsFormat": "american",
         "date": snapshot_date,
-        "commenceTimeFrom": f"{date}T00:00:00Z",
-        "commenceTimeTo": f"{date}T23:59:59Z",
+        # Local-game-date window (7am ET on `date` -> 6:59am ET next day),
+        # not a UTC calendar day -- a UTC window drops every >=8pm ET start.
+        "commenceTimeFrom": f"{date}T11:00:00Z",
+        "commenceTimeTo": f"{next_day}T10:59:59Z",
     }
     envelope = api_get(url, params, api_key)
     return [
@@ -124,7 +128,7 @@ def get_historical_player_props(event_id, snapshot_date, api_key):
     return envelope["data"]
 
 
-def get_all_historical_player_props(date, api_key):
+def get_all_historical_player_props(date, api_key, games=None):
     """Historical counterpart to get_all_player_props: list every game on
     `date`, then fetch pitcher_strikeouts props for each at a snapshot as
     close to that specific game's own commence_time as the API has data for
@@ -136,7 +140,8 @@ def get_all_historical_player_props(date, api_key):
     start time) -- an end-of-day snapshot would miss any game whose market
     already closed by then, the same "only returns still-open markets"
     behavior the live /odds endpoint has (see CLAUDE.md's Known Issues)."""
-    games = get_historical_games(date, f"{date}T11:00:00Z", api_key)
+    if games is None:
+        games = get_historical_games(date, f"{date}T11:00:00Z", api_key)
     logger.info(f"Found {len(games)} historical games on {date}")
 
     results = []

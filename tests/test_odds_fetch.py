@@ -150,6 +150,27 @@ class TestGetHistoricalGames:
             assert game["commence_time"] == "2025-04-09T16:35:00Z"
             assert "extra_field" not in game
 
+    def test_get_historical_games_window_covers_late_west_coast_games(self):
+        # Real bug, caught 2026-11-27: a UTC calendar-day window
+        # (D T00:00Z -> D T23:59Z) drops every game starting >= 8pm ET, since
+        # those commence on D+1 in UTC -- and D+1's own 11:00Z listing
+        # snapshot is after they've already started, so they were never
+        # fetched by any date. The window must match the schedule's local
+        # game_date: D T11:00Z (7am ET) through D+1 T10:59:59Z.
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"data": []}
+        mock_resp.headers = {}
+
+        with patch("odds_fetch.requests.get", return_value=mock_resp) as mock_get:
+            from odds_fetch import get_historical_games
+            get_historical_games("2025-09-30", "2025-09-30T11:00:00Z", api_key="test-key")
+
+            params = mock_get.call_args[1]["params"]
+            assert params["commenceTimeFrom"] == "2025-09-30T11:00:00Z"
+            # month rollover handled
+            assert params["commenceTimeTo"] == "2025-10-01T10:59:59Z"
+
     def test_get_historical_games_returns_empty_list_when_no_games(self):
         fake_envelope = {"timestamp": "t", "previous_timestamp": None, "next_timestamp": None, "data": []}
         mock_resp = MagicMock()
@@ -328,3 +349,18 @@ class TestApiGet:
             odds_fetch._last_requests_used = None
             odds_fetch.api_get("http://example.com", {}, api_key="test-key")
             assert odds_fetch.get_last_usage() is None
+
+
+class TestGetAllHistoricalPlayerPropsPrelisted:
+    def test_uses_passed_games_instead_of_relisting(self):
+        # The season backfill lists games first to cross-check against the
+        # schedule before spending credits on props -- passing that listing
+        # back in avoids paying for the (10-credit) listing call twice.
+        games = [{"id": "g1", "away_team": "A", "home_team": "B", "commence_time": "2025-04-09T17:05:00Z"}]
+        with patch("odds_fetch.get_historical_games") as mock_games, \
+             patch("odds_fetch.get_historical_player_props", return_value={"bookmakers": []}), \
+             patch("odds_fetch.time.sleep"):
+            from odds_fetch import get_all_historical_player_props
+            result = get_all_historical_player_props("2025-04-09", api_key="k", games=games)
+            mock_games.assert_not_called()
+            assert result[0]["game"] == games[0]
