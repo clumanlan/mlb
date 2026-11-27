@@ -15,7 +15,7 @@ S3 bucket `mlbdk` (us-east-2), Parquet, partitioned `{table}/{year}/{YYYY-MM-DD}
 | Source | Coverage | Notes |
 |---|---|---|
 | Game data (schedule, box scores, play-by-play) — MLB Stats API | 2016–present | 2020/2021 excluded from model training (COVID-shortened season) |
-| Odds (team lines + player props) — The Odds API | Live daily since ~2026-05 | A one-off historical pull (10x normal credit cost) added 2025 season-long coverage for backtesting; nothing before 2025 exists |
+| Odds (team lines + player props) — The Odds API | Live daily since ~2026-05 | 2025 historical backfill in progress for backtesting (see `ROADMAP.md`). Nothing before 2025 exists. |
 | DraftKings slate (contest/player pool) | Live daily | Feeds lineup/slate context, not itself a training source |
 
 Pipeline layers, in order:

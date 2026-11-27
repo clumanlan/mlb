@@ -1,6 +1,6 @@
 # Roadmap
 
-**Last updated:** 2026-09-15. Full dated history of every session's changes, findings, and corrections now lives in `DECISIONS.md` (newest first) — this file holds only current state and forward-looking backlog. (Split out 2026-09-04; see `DECISIONS.md`'s own top entry for why.)
+**Last updated:** 2026-11-27. Full dated history of every session's changes, findings, and corrections now lives in `DECISIONS.md` (newest first) — this file holds only current state and forward-looking backlog. (Split out 2026-09-04; see `DECISIONS.md`'s own top entry for why.)
 **Purpose:** the one living doc for where this project is going and what's next. Read this first when picking up work after a gap. Update it at the end of any session that changes priorities or ships something on this list — don't let it go stale the way `implementation_plan.md`/`mlb_dashboard_plan.md` did (both deleted 2026-08-19 for exactly this reason).
 
 ---
@@ -14,6 +14,35 @@ An end-to-end MLB ML system for DraftKings prop research: a shared feature store
 **Current reality:** five models with a baseline built (`hit_predictor`, `k_predictor`, `n_pa_predictor`, `bb_predictor`, `short_outing_predictor`) — every candidate in README's sub-problem menu now has a baseline — each still on its own bespoke feature pipeline (not yet on the shared store). Feature-store convergence was deliberately deferred until model #2 existed — it now does (see Mid-term's "Feature-store convergence" item), and as of 2026-09-09 has actually started, on `n_pa_predictor` rather than `k_predictor` (see "Production plan" below for why).
 
 ---
+
+## Off-season priority: 2025 historical odds (added 2026-11-27)
+
+**Goal:** give every model that has a matching DraftKings prop real 2025 market lines, so each can face a real-odds backtest instead of only a naive-baseline check. Today only `k_predictor` has ever been tested against the market, and on 2026 data alone.
+
+**Why now:** the daily pipeline is paused until spring, and Odds API credits reset on the 1st of each month without rolling over. Every unspent month is 20,000 credits lost. Historical pulls cost 10 credits per market per game, plus 10 per date for the game listing.
+
+**Market coverage, in priority order** (set by the user 2026-11-27; DraftKings availability for all four markets confirmed on a 2025 game):
+
+| Model | Market | 2025 status | Credits left to finish |
+|---|---|---|---|
+| 1. `k_predictor` | `pitcher_strikeouts` | 1,850 of 1,865 games, 2025-03-18 to 2025-08-17 | ~6,200 (565 games, 42 dates) |
+| 2. `hit_predictor` | `batter_hits` | not started | ~26,100 |
+| 3. `bb_predictor` | `pitcher_walks` | not started | ~50,400 combined with outs |
+| 3. `short_outing_predictor` | `pitcher_outs` | not started | (combined with walks above) |
+
+`n_pa_predictor` and `batters_faced_predictor` have no direct DK market, so they're skipped.
+
+**Monthly plan:**
+- **Dec 1:** finish `pitcher_strikeouts` (~6,200), then start `batter_hits` from opening day (~13,000, about half the season).
+- **Jan 1:** finish `batter_hits` (~13,100), then start `pitcher_walks` + `pitcher_outs` together (~6,400). Fetching both markets in one call shares the listing cost.
+- **Feb 1:** continue walks + outs (~19,500), reaching about half the season before the pipeline resumes in late March.
+- **After that:** finish walks + outs with spare in-season quota (the daily Lambda needs only ~1,700 a month) or next off-season. The 2026 gaps (opening day to 04-29, and the 08-16 to 08-27 outage) come after, only if a backtest needs them.
+
+**Before Dec 1:**
+1. Generalize `src/models/k_predictor/backtest/fetch_2025_season_odds.py` beyond `pitcher_strikeouts`. Make the market list a parameter, write each market to its own `raw_data/odds/historical/{market}/2025/` prefix, and resume per market. TDD, per `CLAUDE.md`. It probably belongs outside `k_predictor/` once it serves several models.
+2. Rotate the Odds API key (`/mlb/odds-api/api-key` in SSM). The old key was written to a local log before the redaction fix.
+
+**First use of the data:** rerun the `k_predictor` edge report on 2025's full ~2,400 games once complete. That's a test season with no 2026-specific conditions, and a larger sample than the 1,160-start 2026 backtest.
 
 ## Production plan (Feature Store / FTI pipelines)
 
